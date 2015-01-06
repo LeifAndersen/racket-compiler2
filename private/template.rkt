@@ -64,9 +64,9 @@
         [(letvoid defs boxes? body)
          (letvoid defs boxes? (bp* body))]
         [(setv id body)
-         (setv (bp* id) (bp* body))]
+         (setv (bp-list* id) (bp* body))]
         [(setb id body)
-         (setb (bp* id) (bp* body))]
+         (setb (bp-list* id) (bp* body))]
         [(bo id) (bo (bp* id))]
         [(unbo id) (unbo (bp* id))]
         [(quo datum) (quo datum)]

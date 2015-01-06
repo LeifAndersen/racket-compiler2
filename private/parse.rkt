@@ -13,7 +13,7 @@
   (for/fold ([acc env])
             ([var vars])
     (define var* (syntax->datum var))
-    (hash-set env var* (gensym var*))))
+    (hash-set acc var* (gensym var*))))
 
 (define (lookup-env env var)
   (hash-ref env (syntax->datum var)
@@ -95,7 +95,9 @@
     #:literals (#%plain-lambda case-lambda if begin begin0 let-values
                 letrec-values set! quote quote-syntax with-continuation-mark
                 #%plain-app #%top #%variable-reference)
-    [id:id (ide (lookup-env env #'id) #'id)]
+    [id:id (ide (lookup-env env #'id)
+                (identifier-binding #'id)
+                (syntax->datum #'id))]
     [(#%plain-lambda formals body ...+)
      (parse-lambda #'formals #'(body ...) env)]
     [(case-lambda (formals body ...+) ...)
@@ -116,9 +118,11 @@
     [(let-values ([(ids:id ...) val] ...)
        body ...+)
      (define env* (extend-env env
-                              (for/list ([i (syntax->list #'((ids ...) ...))])
-                                (for/list ([i* (syntax->list i)])
-                                  i*))))
+                              (apply
+                               append
+                               (for/list ([i (syntax->list #'((ids ...) ...))])
+                                 (for/list ([i* (syntax->list i)])
+                                   i*)))))
      (letv (for/list ([i (syntax->list #'((ids ...) ...))]
                       [v (syntax->list #'(val ...))])
              (defv (for/list ([i* (syntax->list i)])
@@ -129,9 +133,11 @@
     [(letrec-values ([(ids:id ...) val] ...)
        body ...+)
      (define env* (extend-env env
-                              (for/list ([i (syntax->list #'((ids ...) ...))])
-                                (for/list ([i* (syntax->list i)])
-                                  i*))))
+                              (apply
+                               append
+                               (for/list ([i (syntax->list #'((ids ...) ...))])
+                                 (for/list ([i* (syntax->list i)])
+                                   i*)))))
      (letrecv (for/list ([i (syntax->list #'((ids ...) ...))]
                          [v (syntax->list #'(val ...))])
                 (defv (for/list ([i* (syntax->list i)])
@@ -167,7 +173,7 @@
      (define env* (extend-env env
                               (for/list ([i (syntax->list #'(ids ...))])
                                 i)))
-     (lam (for ([i (syntax->list #'(ids ...))])
+     (lam (for/list ([i (syntax->list #'(ids ...))])
             (parse-expr i env*))
           #f (beg (body* env*)))]
     [(ids:id ... . rest:id)

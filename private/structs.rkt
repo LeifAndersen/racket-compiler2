@@ -2,6 +2,17 @@
 
 (provide (all-defined-out))
 
+(define-type Binding
+  (U False 'lexical
+     (List
+      Module-Path-Index
+      Symbol
+      Module-Path-Index
+      Symbol
+      Nonnegative-Integer
+      (U Integer False)
+      (U Integer False))))
+
 (struct topform () #:transparent)
 
 #|
@@ -80,10 +91,8 @@ Pass 3: Mutable Variable Elimination
 +       |  (set!-boxes (<id> ...) <expr>)
 +       |  (box! <id>)
 +       |  (unbox <id>)
--       |  (let ([<id> <expr>] ...) <expr> ...+)
-+       |  (let ([<bid> <expr>] ...) <expr> ...+)
--       |  (let-void (<id> ...) <expr> ...+)
-+       |  (let-void (<bid> ...) <expr> ...+)
++       |  (let-boxed ([<id> <expr>] ...) <expr> ...+)
++       |  (let-void-boxed (<id> ...) <expr> ...+)
 ...
 
 Pass 3: Closure Conversion
@@ -206,7 +215,8 @@ Pass 5: De Bruijn Indices
 (struct expression genform () #:transparent)
 
 (struct ide expression ([id : Symbol]
-                        [val : Identifier])
+                        [binding : Binding]
+                        [name : Symbol])
         #:transparent)
 
 (struct voi expression ()
@@ -216,7 +226,7 @@ Pass 5: De Bruijn Indices
                         [type : (U 'val 'ref 'flonum 'fixnum 'extflonum)])
         #:transparent)
 
-(struct lam expression ([args : (Listof ide)]
+(struct lam expression ([args : (Listof (U ide var))]
                         [rest : (U ide #f)]
                         [body : expression])
         #:transparent)
@@ -250,6 +260,7 @@ Pass 5: De Bruijn Indices
         #:transparent)
 
 (struct letvoid expression ([defs : (Listof ide)]
+                            [boxes : Boolean]
                             [body : expression])
         #:transparent)
 
