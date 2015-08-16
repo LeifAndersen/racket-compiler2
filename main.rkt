@@ -27,16 +27,24 @@
 (module+ test
   (require rackunit
            rackunit/text-ui)
+
+  ; Counter for a version of fresh that is deterministic (for tests)
   (define deterministic-fresh/count 0)
   (define (deterministic-fresh symb)
     (set! deterministic-fresh/count (+ deterministic-fresh/count 1))
     (string->symbol (format "~a.~a" symb deterministic-fresh/count)))
+
+  ;; Store of all tests created with define-compiler-test
   (define all-compiler-tests '())
+
+  ; Defines a test-suite for nanopass,
+  ; binds quasiquote to the language, test called `lang`-tests
+  ; lang tests ... -> void
   (define-syntax (define-compiler-test stx)
     (syntax-parse stx
       [(_ lang body ...+)
        #:with with-output-language (format-id stx "with-output-language")
-       #:with name (format-id stx "~a-tests" #'lang)
+       #:with name (format-id stx "~a-tests~a" #'lang (gensym))
        #`(begin
            (define name
                (with-output-language (lang top-level-form)
@@ -48,8 +56,12 @@
                        (set! deterministic-fresh/count 0)
                        body) ...))))
            (set! all-compiler-tests (cons name all-compiler-tests)))]))
+
+  ;; Run all tests defined with define-compiler-test
   (define-syntax-rule (run-all-compiler-tests)
-    (map run-tests all-compiler-tests)))
+    (let ()
+      (map run-tests all-compiler-tests)
+      (void))))
 
 (define-language Lsrc
   (terminals
@@ -147,10 +159,28 @@
 (define-language L3
   (extends L2)
   (expr (expr)
-        (- (letrec-values ([(id ...) expr1] ...)
-             abody))
-        (+ (letrec ([id lambda])
-             expr))))
+        (- (let-values ([(id ...) expr1] ...)
+             abody)
+           (letrec-values ([(id ...) expr1] ...)
+             abody)
+           (set! id expr))
+        (+ (undefined)
+           (let ([id expr1] ...)
+             abody)
+           (letrec ([id lambda] ...)
+             expr)
+           (set!-values (id ...) expr))))
+
+(define-language L4
+  (extends L3))
+
+; Grabs set of identifiers out of formals non-terminal in a language
+; lang formals -> (listof identifiers)
+(define-syntax-rule (formals->identifiers lang fmls)
+  (nanopass-case (lang formals) fmls
+                 [,id (list id)]
+                 [(,id (... ...)) id]
+                 [(,id ,id* (... ...) . ,id2) (set-union (list id id2) id*)]))
 
 ;; Parse and alpha-rename expanded program
 (define-pass parse-and-rename : * (form) -> Lsrc ()
@@ -256,7 +286,7 @@
                                 (for/list ([b* (syntax->list b)])
                                   (parse-expr b* env*))
                                 (parse-expr b1 env*)))
-                   [`((,formal ,body* ... ,body) ...)
+                   [`((,formal ,body* ,body) ...)
                     `(case-lambda (,formal ,body* ... ,body) ...)])]
                 [(if test tbranch fbranch)
                  `(if ,(parse-expr #'test env)
@@ -264,11 +294,11 @@
                       ,(parse-expr #'fbranch env))]
                 [(begin body* ... body)
                  `(begin ,(for/list ([b (syntax->list #'(body* ...))])
-                            (parse-expr b env))
+                            (parse-expr b env)) ...
                          ,(parse-expr #'body env))]
                 [(begin0 body* ... body)
                  `(begin0 ,(for/list ([b (syntax->list #'(body* ...))])
-                             (parse-expr b env))
+                             (parse-expr b env)) ...
                           ,(parse-expr #'body env))]
                 [(let-values ([(ids:id ...) val] ...)
                    body* ... body)
@@ -280,7 +310,7 @@
                                    [v (syntax->list #'(val ...))])
                           (list (for/list ([i* (syntax->list i)])
                                   (lookup-env env* i*))
-                                (parse-expr v env*)))
+                                (parse-expr v env)))
                    [`([(,args ...) ,exp] ...)
                     `(let-values ([(,args ...) ,exp] ...)
                        ,(for/list ([b (syntax->list #'(body* ...))])
@@ -356,12 +386,16 @@
          (if (= (length expr*) 0)
              `(#%plain-lambda ,formals ,expr)
              `(#%plain-lambda ,formals (begin ,expr* ... ,expr)))]
-        [(case-lambda (,[formals] ,[expr*] ... ,[expr]))
+        [(case-lambda (,formals ,expr* ... ,expr))
          (with-output-language (Lsrc expr)
            (make-begin-explicit `(#%plain-lambda ,formals ,expr* ... ,expr)))]
-        [(case-lambda (,[formals] ,[expr*] ... ,[expr]) ...)
-         `(case-lambda ,(with-output-language (Lsrc expr)
-                          (make-begin-explicit `(#%plain-lambda ,formals ,expr* ... ,expr))) ...)]
+        [(case-lambda (,formals ,expr* ... ,expr) ...)
+         `(case-lambda ,(for/list ([f (in-list formals)]
+                                   [e* (in-list expr*)]
+                                   [e (in-list expr)])
+                          (with-output-language (Lsrc expr)
+                            (make-begin-explicit `(#%plain-lambda ,f ,e* ... ,e))))
+                       ...)]
         [(let-values ([(,id ...) ,[expr1]] ...)
            ,[expr*] ... ,[expr])
          (if (= (length expr*) 0)
@@ -377,12 +411,19 @@
              `(letrec-values ([(,id ...) ,expr1] ...)
                 (begin ,expr* ... ,expr)))]))
 
-;(define-syntax-rule (formals->identifiers lang fmls)
-(define-syntax-rule (formals->identifiers lang fmls)
-  (nanopass-case (lang formals) fmls
-                 [,id (list id)]
-                 [(,id (... ...)) id]
-                 [(,id ,id* (... ...) . ,id2) (set-union (list id id2) id*)]))
+(module+ test
+  (define-compiler-test L1
+    (check-equal?
+     (compile/2 #'(case-lambda [(x) (+ x 1) (begin0 x (set! x 42))]))
+     `(#%plain-lambda (x.1)
+                      (begin (#%plain-app + x.1 '1)
+                             (begin0 x.1
+                               (set! x.1 '42)))))
+    (check-equal?
+     (compile/2 #'(case-lambda [(x) (+ x 1)]
+                               [(x y) x (+ x y)]))
+     `(case-lambda (#%plain-lambda (x.1) (#%plain-app + x.1 '1))
+                   (#%plain-lambda (x.2 y.3) (begin x.2 (#%plain-app + x.2 y.3)))))))
 
 (define-pass identify-assigned-variables : L1 (e) -> L2 ()
   (definitions
@@ -391,19 +432,22 @@
   (Lambda : lambda (e) -> lambda ('())
           [(#%plain-lambda ,[formals] ,[expr assigned*])
            (values `(#%plain-lambda ,formals
-                                    (assigned (,(set-intersect assigned* (formals->identifiers* formals)) ...) ,expr))
+                                    (assigned (,(set-intersect assigned*
+                                                               (formals->identifiers* formals))
+                                               ...)
+                                              ,expr))
                    (set-remove assigned* (formals->identifiers* formals)))])
   (Expr : expr (e) -> expr ('())
         [(set! ,id ,[expr assigned*])
-         (values `(set! id expr)
-                 (set-add id assigned*))]
+         (values `(set! ,id ,expr)
+                 (set-add assigned* id))]
         [(let-values ([(,id ...) ,[expr assigned]] ...) ,[expr* assigned*])
          (values `(let-values ([(,id ...) ,expr] ...)
-                    (assigned (,(set-intersect assigned* id) ...) ,expr*))
+                    (assigned (,(set-intersect assigned* (apply set-union id)) ...) ,expr*))
                  (apply set-union (set-remove assigned* id) assigned))]
         [(letrec-values ([(,id ...) ,[expr assigned]] ...) ,[expr* assigned*])
          (values `(letrec-values ([(,id ...) ,expr] ...)
-                    (assigned (,(set-intersect assigned* id) ...) ,expr*))
+                    (assigned (,(set-intersect assigned* (apply set-union id)) ...) ,expr*))
                  (apply set-union (set-remove assigned* id) assigned))]
         ;; Really *should* be generated
         [(if ,[expr1 assigned1] ,[expr2 assigned2] ,[expr3 assigned3])
@@ -456,6 +500,14 @@
         (assigned ()
           y.1)))
     (check-equal?
+     (compile/3 #'(let ([x 8])
+                    (set! x 5)
+                    (+ x 42)))
+     `(let-values ([(x.1) '8])
+        (assigned (x.1)
+                  (begin (set! x.1 '5)
+                         (#%plain-app + x.1 '42)))))
+    (check-equal?
      (compile/3 #'(let ([x 1])
                     (letrec ([y (lambda (x) y)])
                       (+ x y))))
@@ -465,27 +517,103 @@
             (assigned ()
               (#%plain-app + x.1 y.2))))))))
 
-(define-pass purify-letrec : L2 (e) -> L3 ())
+(define-pass purify-letrec : L2 (e) -> L3 ()
+  (Expr : expr (e) -> expr ()
+        [(set! ,id ,[expr])
+         `(set!-values (,id) ,expr)]
+        [(letrec-values ([(,id) ,[lambda]] ...)
+           (assigned (,id* ...) ,[expr]))
+         (guard (set-empty? (set-intersect id* id)))
+         `(letrec ([,id ,lambda] ...)
+            ,expr)]
+        [(letrec-values ([(,id ...) ,[expr]] ...)
+           (assigned (,id* ...) ,[expr*]))
+         (define flattened-ids (apply append id))
+         (define undef (for/list ([i (in-range (length flattened-ids))])
+                         `(undefined)))
+         `(let ([,flattened-ids ,undef] ...)
+            (assigned (,(apply set-union id* id) ...)
+                      (begin
+                        (set!-values (,id ...) ,expr) ...
+                        ,expr*)))]
+        [(let-values ([(,id) ,[expr]] ...)
+           ,[abody])
+         `(let ([,id ,expr] ...)
+            ,abody)]
+        [(let-values ([(,id ...) ,[expr]] ...)
+           (assigned (,id* ...) ,[expr*]))
+         (define flattened-ids (apply append id))
+         (define undef (for/list ([i (in-range (length flattened-ids))])
+                         `(undefined)))
+         `(let ([,flattened-ids ,undef] ...)
+            (assigned (,(apply set-union id* id) ...)
+                      (begin
+                        (set!-values (,id ...) ,expr) ...
+                        ,expr*)))]))
+
+(define-pass optimize-direct-call : L3 (e) -> L3 ()
+  (Expr : expr (e) -> expr ()
+        [(#%plain-app (#%plain-lambda (,id ...) ,[abody])
+                      ,[expr* -> expr*] ...)
+         (guard (= (length id) (length expr*)))
+         `(let ([,id ,expr*] ...)
+            ,abody)]))
+
+(module+ test
+  (define-compiler-test L3
+    (check-equal?
+     (compile/5 #'((lambda (x) x) (lambda (y) y)))
+     `(let ([x.2 (#%plain-lambda (y.1) (assigned () y.1))])
+        (assigned () x.2)))
+    (check-equal?
+     (compile/5 #'(letrec-values ([(a) (lambda (x) b)]
+                                  [(b) (lambda (y) a)])
+                    (a b)))
+     `(letrec ([a.1 (#%plain-lambda (x.3) (assigned () b.2))]
+               [b.2 (#%plain-lambda (y.4) (assigned () a.1))])
+        (#%plain-app a.1 b.2)))
+    (check-equal?
+     (compile/5 #'(letrec-values ([(a) 5]
+                                  [(b c) (values 6 7)])
+                    (+ a b c)))
+     `(let ([a.1 (undefined)]
+            [b.2 (undefined)]
+            [c.3 (undefined)])
+        (assigned (c.3 b.2 a.1)
+                  (begin
+                    (set!-values (a.1) '5)
+                    (set!-values (b.2 c.3) (#%plain-app values '6 '7))
+                    (#%plain-app + a.1 b.2 c.3)))))
+    (check-equal?
+     (compile/5 #'(let ([x (if #t 5 6)])
+                    (set! x (+ x 1))))
+     `(let ([x.1 (if '#t '5 '6)])
+        (assigned (x.1) (set!-values (x.1) (#%plain-app + x.1 '1)))))))
+
+(define-pass convert-assignments : L3 (e) -> L4 ())
 
 (define-syntax (define-compiler stx)
   (syntax-parse stx
     [(_ name:id passes*:id ...+)
      (define passes (reverse (syntax->list #'(passes* ...))))
      #`(begin (define name (compose #,@passes))
-              #,@(let build-partial-compiler ([passes passes]
-                                              [pass-count (length passes)])
-                   (if (= pass-count 0)
-                       '()
-                       (with-syntax ([name* (format-id stx "~a/~a" #'name (- pass-count 1))])
-                         (cons #`(define name* (compose #,@passes))
-                               (build-partial-compiler (cdr passes) (- pass-count 1)))))))]))
+              (module+ test
+                #,@(let build-partial-compiler ([passes passes]
+                                                [pass-count (length passes)])
+                     (if (= pass-count 0)
+                         '()
+                         (with-syntax ([name* (format-id stx "~a/~a" #'name (- pass-count 1))])
+                           (cons #`(define name* (compose #,@passes))
+                                 (build-partial-compiler (cdr passes) (- pass-count 1))))))))]))
 
 (define-compiler compile
   expand-syntax
   parse-and-rename
   make-begin-explicit
   identify-assigned-variables
-  purify-letrec)
+  purify-letrec
+  optimize-direct-call
+  convert-assignments)
 
 (module+ test
   (run-all-compiler-tests))
