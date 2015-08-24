@@ -118,9 +118,9 @@
         (#%variable-reference-top (id))
         (#%variable-reference))
   (formals (formals)
-   id
-   (id ...)
-   (id id* ... . id2)))
+           id
+           (id ...)
+           (id id* ... . id2)))
 
 (define-language L1
   (extends Lsrc)
@@ -208,15 +208,59 @@
            (let-void (id ...) expr))))
 
 (define-language L7
-  (extends L6))
+  (extends L6)
+  (terminals
+   (+ (exact-nonnegative-integer (exact-nonnegative-integer eni))
+      (boolean (boolean))))
+  (expr (expr)
+        (- id
+           (let-void (id ...) expr)
+           (let ([id expr1]) expr)
+           (letrec ([id lambda] ...)
+             expr)
+           (set!-boxes (id ...) expr)
+           (set!-values (id ...) expr)
+           (#%box id)
+           (#%unbox id)
+           (#%top . id)
+           (#%variable-reference id)
+           (#%variable-reference-top (id)))
+        (+ eni
+           (let-void eni expr)
+           (let-one expr1 expr)
+           (letrec (lambda ...)
+             expr)
+           (set!-boxes (eni ...) expr)
+           (set!-values (eni ...) expr)
+           (#%box eni)
+           (#%unbox eni)
+           (#%top . eni)
+           (#%variable-reference eni)
+           (#%variable-reference-top (eni))))
+  (lambda (lambda)
+    (- (#%plain-lambda formals fbody))
+    (+ (#%plain-lambda eni1 boolean (eni2 ...) (eni3 ...) expr)))
+  (formals (formals)
+           (- id
+              (id ...)
+              (id id* ... . id2)))
+  (free-body (fbody)
+             (- (free (id ...) (id* ...) expr))))
 
 ; Grabs set of identifiers out of formals non-terminal in a language
 ; lang formals -> (listof identifiers)
 (define-syntax-rule (formals->identifiers lang fmls)
   (nanopass-case (lang formals) fmls
-                 [,id (list id)]
-                 [(,id (... ...)) id]
+                 [,id                         (list id)]
+                 [(,id (... ...))             id]
                  [(,id ,id* (... ...) . ,id2) (set-union (list id id2) id*)]))
+
+; lang formals -> boolean
+(define-syntax-rule (formals-rest? lang fmls)
+  (nanopass-case (lang formals) fmls
+                 [,id                         #t]
+                 [(,id (... ...))             #f]
+                 [(,id ,id* (... ...) . ,id2) #t]))
 
 ;; Parse and alpha-rename expanded program
 (define-pass parse-and-rename : * (form) -> Lsrc ()
@@ -227,7 +271,7 @@
                 ([var vars])
         (define var* (syntax->datum var))
         (dict-set acc var* ((fresh) var*))))
-    (define (lookup-env env var)
+    (define ((lookup-env env) var)
       (dict-ref env (syntax->datum var)
                 (syntax->datum var))))
 
@@ -306,7 +350,7 @@
                 #:literals (#%plain-lambda case-lambda if begin begin0 let-values letrec-values set!
                                            quote quote-syntax with-continuation-mark #%plain-app
                                            #%top #%variable-reference)
-                [id:id (lookup-env env #'id)]
+                [id:id ((lookup-env env) #'id)]
                 [(#%plain-lambda formals body* ... body)
                  (define-values (formals* env*) (parse-formals #'formals env))
                  `(#%plain-lambda ,formals*
@@ -344,8 +388,7 @@
                                            (map syntax->list (syntax->list #'((ids ...) ...))))))
                  (match (for/list ([i (syntax->list #'((ids ...) ...))]
                                    [v (syntax->list #'(val ...))])
-                          (list (for/list ([i* (syntax->list i)])
-                                  (lookup-env env* i*))
+                          (list (map (lookup-env env*) (syntax->list i))
                                 (parse-expr v env)))
                    [`([(,args ...) ,exp] ...)
                     `(let-values ([(,args ...) ,exp] ...)
@@ -360,8 +403,7 @@
                                            (map syntax->list (syntax->list #'((ids ...) ...))))))
                  (match (for/list ([i (syntax->list #'((ids ...) ...))]
                                    [v (syntax->list #'(val ...))])
-                          (list (for/list ([i* (syntax->list i)])
-                                  (lookup-env env* i*))
+                          (list (map (lookup-env env*) (syntax->list i))
                                 (parse-expr v env*)))
                    [`([(,args ...) ,exp] ...)
                     `(letrec-values ([(,args ...) ,exp] ...)
@@ -384,7 +426,7 @@
                 [(#%variable-reference . id:id)
                  `(#%variable-reference ,(parse-expr #'id env))]
                 [(#%variable-reference (#%top . id:id))
-                 `(#%variable-reference-top (,(lookup-env env #'id)))]
+                 `(#%variable-reference-top (,((lookup-env env) #'id)))]
                 [(#%variable-reference)
                  `(#%variable-reference)]))
 
@@ -397,10 +439,10 @@
                          (parse-expr i env*)) ...)
                     env*)]
                   [(id:id ids:id ... . rest:id)
-                   (define env* (extend-env env (cons #'id (cons #'rest (syntax->list #'(ids ...))))))
+                   (define env* (extend-env env (list* #'id #'rest (syntax->list #'(ids ...)))))
                    (values
-                    `(,(parse-expr #'id env* )
-                      ,(for ([i (syntax->list #'(ids ...))])
+                    `(,(parse-expr #'id env*)
+                      ,(for/list ([i (syntax->list #'(ids ...))])
                          (parse-expr i env*)) ...
                       . ,(parse-expr #'rest env*))
                     env*)]
@@ -430,7 +472,12 @@
                      ((#%plain-app + '1 '2)))
          (#%plain-app + '3 '4)
          (submodule pre racket
-                    ((#%plain-app + '5 '6))))))))
+                    ((#%plain-app + '5 '6))))))
+    (check-equal?
+     (compile/1 #'(lambda (a b . c)
+                    (apply + a b c)))
+     `(#%expression (#%plain-lambda (a.1 b.3 . c.2)
+                                    (#%plain-app apply + a.1 b.3 c.2))))))
 
 (define-pass make-begin-explicit : Lsrc (e) -> L1 ()
   (Expr : expr (e) -> expr ()
@@ -687,13 +734,17 @@
     (define ((lookup-env env) x)
       (dict-ref env x x))
     (define (extend-env env assigned*)
-      (define temp* (map (fresh) assigned*))
+      ;(define temp* (map (fresh) assigned*))
+      (define temp* assigned*)
       (append (map cons assigned* temp*) env))
     (with-output-language (L4 expr)
       (define (build-let id* expr* body)
         (if (null? id*)
             body
-            `(let ([,id* (#%box ,expr*)] ...)
+            `(begin
+               (set!-values (,id*) (#%box ,expr*)) ...
+               ,body)
+            #;`(let ([,id* (#%box ,expr*)] ...)
                ,body)))))
   (Formals : formals (e [env '()]) -> formals ()
            [,id ((lookup-env env) id)]
@@ -739,8 +790,9 @@
      (compile/6 #'(let ([x 5])
                     (set! x 6)
                     x))
-     `(let ([x.1.2 '5])
-        (let ([x.1 (#%box x.1.2)])
+     `(let ([x.1 '5])
+        (begin
+          (set!-values (x.1) (#%box x.1))
           (begin
             (set!-boxes (x.1) '6)
             (#%unbox x.1)))))
@@ -748,8 +800,9 @@
      (compile/6 #'(lambda (x y)
                     (set! x 5)
                     (list x y)))
-     `(#%expression (#%plain-lambda (x.1.3 y.2)
-                                    (let ([x.1 (#%box x.1.3)])
+     `(#%expression (#%plain-lambda (x.1 y.2)
+                                    (begin
+                                      (set!-values (x.1) (#%box x.1))
                                       (begin
                                         (set!-boxes (x.1) '5)
                                         (#%plain-app list (#%unbox x.1) y.2))))))
@@ -758,8 +811,9 @@
                     (let ()
                       (set! x 42)
                       (+ x 8))))
-     `(#%expression (#%plain-lambda x.1.2
-                                    (let ([x.1 (#%box x.1.2)])
+     `(#%expression (#%plain-lambda x.1
+                                    (begin
+                                      (set!-values (x.1) (#%box x.1))
                                       (begin
                                         (set!-boxes (x.1) '42)
                                         (#%plain-app + (#%unbox x.1) '8))))))
@@ -767,11 +821,12 @@
      (compile/6 #'(let-values ([(x y) (values 1 2)])
                     (set! x y)
                     y))
-     `(let ([x.1.3 (undefined)]
+     `(let ([x.1 (undefined)]
             [y.2 (undefined)])
         (begin
-          (set!-values (x.1.3 y.2) (#%plain-app values '1 '2))
-          (let ([x.1 (#%box x.1.3)])
+          (set!-values (x.1 y.2) (#%plain-app values '1 '2))
+          (begin
+            (set!-values (x.1) (#%box x.1))
             (begin
               (set!-boxes (x.1) y.2)
               y.2)))))))
@@ -941,6 +996,9 @@
   (Expr : expr (e) -> expr ()
         [(let ([,id ,[expr1]]) ,[expr])
          `(let ([,id ,expr1]) ,expr)]
+        [(let ([,id (undefined)] ...) ,[expr])
+         `(let-void (,id ...)
+                    ,expr)]
         [(let ([,id ,[expr1]] ...) ,[expr])
          `(let-void (,id ...)
                     (begin
@@ -966,24 +1024,94 @@
                                [(z) 3])
                     (set! x 5)
                     (+ x y z)))
-     `(let-void (x.1.4 y.2 z.3)
+     `(let-void (x.1 y.2 z.3)
                 (begin
-                  (set!-values (x.1.4) (undefined))
-                  (set!-values (y.2) (undefined))
-                  (set!-values (z.3) (undefined))
+                  (set!-values (x.1 y.2) (#%plain-app values '1 '2))
+                  (set!-values (z.3) '3)
                   (begin
-                    (set!-values (x.1.4 y.2) (#%plain-app values '1 '2))
-                    (set!-values (z.3) '3)
-                    (let ([x.1 (#%box x.1.4)])
-                      (begin
-                        (set!-boxes (x.1) '5)
-                        (#%plain-app + (#%unbox x.1) y.2 z.3)))))))))
+                    (set!-values (x.1) (#%box x.1))
+                    (begin
+                      (set!-boxes (x.1) '5)
+                      (#%plain-app + (#%unbox x.1) y.2 z.3))))))
+    (check-equal?
+     (compile/8 #'(let ([x 5])
+                    (lambda (y)
+                      (set! x 6)
+                      (+ x y))))
+     `(let ([x.1 '5])
+        (begin
+          (set!-values (x.1) (#%box x.1))
+          (#%plain-lambda (y.2)
+                          (free (x.1) (+)
+                                (begin
+                                  (set!-boxes (x.1) '6)
+                                  (#%plain-app + (#%unbox x.1) y.2)))))))))
 
-(define-pass debruijn-indices : L6 (e) -> L7 ())
+(define-pass debruijn-indices : L6 (e) -> L7 ()
+  (definitions
+    (define-syntax-rule (formals->identifiers* fmls)
+      (formals->identifiers L6 fmls))
+    (define-syntax-rule (formals-rest?* fmls)
+      (formals-rest? L6 fmls))
+    (define (extend-env env start ids)
+      (for/fold ([env env] [ref start])
+                ([i ids])
+        (values (dict-set env i (+ ref 1)) (+ ref 1))))
+    (define (lookup-env env id)
+      (dict-ref env id 0))
+    (define ((var->index env frame) id)
+      (- frame (lookup-env env id))))
+  (Lambda : lambda (e [env '()] [frame 0]) -> lambda ()
+          [(#%plain-lambda ,formals
+                           (free (,id2 ...) (,id3 ...)
+                                 ,expr))
+           (define params (formals->identifiers* formals))
+           (define rest? (formals-rest?* formals))
+           (define-values (env* frame*) (extend-env env frame (reverse (append id2 params))))
+           `(#%plain-lambda ,(length params)
+                            ,rest?
+                            (,(map (var->index env frame) id2) ...)
+                            (,(map (var->index env frame) id3) ...)
+                            ,(Expr expr env* frame*))])
+  (Expr : expr (e [env '()] [frame 0]) -> expr ()
+        [,id ((var->index env frame) id)]
+        [(#%box ,id) `(#%box ,((var->index env frame) id))]
+        [(#%unbox ,id) `(#%unbox ,((var->index env frame) id))]
+        [(set!-values (,id ...) ,[expr])
+         `(set!-values (,(map (var->index env frame) id) ...) ,expr)]
+        [(set!-boxes (,id ...) ,[expr])
+         `(set!-boxes (,(map (var->index env frame) id) ...) ,expr)]
+        [(#%top . ,id) `(#%top . 0)] ;; TODO: Global Vars
+        [(#%variable-reference-top (,id)) `(#%variable-reference-top (0))] ;; TODO: Global vars
+        [(#%variable-reference ,id) `(#%variable-reference ,((var->index env frame) id))]
+        [(let ([,id ,[expr1]])
+           ,expr)
+         (define-values (env* frame*) (extend-env env frame (list id)))
+         `(let-one ,expr1 ,(Expr expr env* frame*))]
+        [(let-void (,id ...)
+                   ,expr)
+         (define-values (env* frame*) (extend-env env frame (reverse id)))
+         `(let-void ,(length id)
+                    ,(Expr expr env* frame*))]
+        [(letrec ([,id ,lambda] ...)
+           ,expr)
+         (define-values (env* frame*) (extend-env env frame (reverse id)))
+         `(letrec (,(Lambda lambda env* frame*) ...)
+            ,(Expr expr env* frame*))]))
+
+(module+ test
+  (define-compiler-test L7
+    (check-equal?
+     (compile/9 #'(lambda (x) x))
+     `(#%expression (#%plain-lambda 1 #f () () 0)))
+    (check-equal?
+     (compile/9 #'(let ([x 5])
+                    (lambda (y . z) x)))
+     `(let-one '5 (#%plain-lambda 2 #t (0) () 0)))))
 
 (define-syntax (define-compiler stx)
   (syntax-parse stx
-    [(_ name:id passes*:id ...+)
+    [(_ name:id passes* ...+)
      (define passes (reverse (syntax->list #'(passes* ...))))
      #`(begin (define name (compose #,@passes))
               ;(module+ test
@@ -991,11 +1119,13 @@
                                                 [pass-count (length passes)])
                      (if (= pass-count 0)
                          '()
-                         (with-syntax ([name* (format-id stx "~a/~a" #'name (- pass-count 1))]
-                                       [name** (format-id stx "~a/~a" #'name (car passes))])
-                           (list* #`(define name* (compose #,@passes))
-                                  #`(define name** name*)
-                                  (build-partial-compiler (cdr passes) (- pass-count 1)))))))#|)|#]))
+                         (with-syntax ([name* (format-id stx "~a/~a" #'name (- pass-count 1))])
+                           (cons #`(define name* (compose #,@passes))
+                                 (if (identifier? (car passes))
+                                     (with-syntax ([name** (format-id stx "~a/~a" #'name (car passes))])
+                                       (cons #`(define name** name*)
+                                             (build-partial-compiler (cdr passes) (- pass-count 1))))
+                                     (build-partial-compiler (cdr passes) (- pass-count 1)))))))#|)|#)]))
 
 (define (expand-syntax* stx)
   (parameterize ([current-namespace (make-base-namespace)])
