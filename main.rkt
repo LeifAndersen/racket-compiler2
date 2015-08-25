@@ -5,6 +5,12 @@
          racket/match
          racket/set
          racket/dict
+         racket/port
+         compiler/zo-marshal
+         compiler-goodies
+         (prefix-in zo: compiler/zo-structs)
+         (rename-in racket/base
+                    [compile base:compile])
          (for-syntax racket/base
                      syntax/parse
                      racket/syntax))
@@ -43,12 +49,12 @@
   ; lang tests ... -> void
   (define-syntax (define-compiler-test stx)
     (syntax-parse stx
-      [(_ lang body ...+)
+      [(_ lang form body ...+)
        #:with with-output-language (format-id stx "with-output-language")
        #:with name (format-id stx "~a-tests~a" #'lang (gensym))
        #`(begin
            (define name
-               (with-output-language (lang top-level-form)
+               (with-output-language (lang form)
                  (test-suite
                      (format "Test suite for: ~a" '#,(syntax->datum #'lang))
                    #:before (lambda () (set! deterministic-fresh/count 0))
@@ -62,7 +68,14 @@
   (define-syntax-rule (run-all-compiler-tests)
     (let ()
       (map run-tests all-compiler-tests)
-      (void))))
+      (void)))
+
+  ;; Compare result of current compiler to regular compiler
+  (define-syntax-rule (compile-compare expression)
+    (test-case "Test case for finished compiler"
+      (check-equal?
+       (eval (bytes->compiled-expression (compile expression)))
+       (eval expression)))))
 
 (define-language Lsrc
   (terminals
@@ -203,7 +216,8 @@
 (define-language L6
   (extends L5)
   (expr (expr)
-        (- (let ([id expr1] ...) expr))
+        (- (let ([id expr1] ...) expr)
+           (undefined))
         (+ (let ([id expr1]) expr)
            (let-void (id ...) expr))))
 
@@ -230,8 +244,8 @@
            (let-one expr1 expr)
            (letrec (lambda ...)
              expr)
-           (set!-boxes (eni ...) expr)
-           (set!-values (eni ...) expr)
+           (set!-boxes eni1 eni2 expr)
+           (set!-values eni1 eni2 expr)
            (#%box eni)
            (#%unbox eni)
            (#%top . eni)
@@ -246,6 +260,15 @@
               (id id* ... . id2)))
   (free-body (fbody)
              (- (free (id ...) (id* ...) expr))))
+
+(define-language L8
+  (extends L7)
+  (entry compilation-top)
+  (compilation-top (compilation-top)
+                   (+ (program eni top-level-form)))
+  (lambda (lambda)
+    (- (#%plain-lambda eni1 boolean (eni2 ...) (eni3 ...) expr))
+    (+ (#%plain-lambda eni1 boolean (eni2 ...) (eni3 ...) eni4 expr))))
 
 ; Grabs set of identifiers out of formals non-terminal in a language
 ; lang formals -> (listof identifiers)
@@ -453,7 +476,7 @@
   (parse-top form initial-env))
 
 (module+ test
-  (define-compiler-test Lsrc
+  (define-compiler-test Lsrc top-level-form
     (check-equal?
      (compile/1 #'(lambda (x) x))
      `(#%expression (#%plain-lambda (x.1) x.1)))
@@ -511,7 +534,7 @@
                 (begin ,expr* ... ,expr)))]))
 
 (module+ test
-  (define-compiler-test L1
+  (define-compiler-test L1 top-level-form
     (check-equal?
      (compile/2 #'(case-lambda [(x) (+ x 1) (begin0 x (set! x 42))]))
      `(#%plain-lambda (x.1)
@@ -591,7 +614,7 @@
     e*))
 
 (module+ test
-  (define-compiler-test L2
+  (define-compiler-test L2 top-level-form
     (check-equal?
      (compile/3 #'(letrec ([y 8])
                     y))
@@ -670,7 +693,7 @@
               ,abody))]))
 
 (module+ test
-  (define-compiler-test L3
+  (define-compiler-test L3 top-level-form
     (check-equal?
      (compile/5 #'((lambda (x) x) (lambda (y) y)))
      `(let ([x.2 (#%plain-lambda (y.1) (assigned () y.1))])
@@ -785,7 +808,7 @@
              `(set!-values (,(map (lookup-env env) id) ...) ,expr*))]])
 
 (module+ test
-  (define-compiler-test L4
+  (define-compiler-test L4 top-level-form
     (check-equal?
      (compile/6 #'(let ([x 5])
                     (set! x 6)
@@ -955,7 +978,7 @@
     e*))
 
 (module+ test
-  (define-compiler-test L5
+  (define-compiler-test L5 top-level-form
     (check-equal?
      (compile/7 #'(lambda (x)
                     (lambda (y)
@@ -1006,7 +1029,7 @@
                       ,expr))]))
 
 (module+ test
-  (define-compiler-test L6
+  (define-compiler-test L6 top-level-form
     (check-equal?
      (compile/8 #'(let ([x 1]) x))
      `(let ([x.1 '1]) x.1))
@@ -1058,9 +1081,15 @@
                 ([i ids])
         (values (dict-set env i (+ ref 1)) (+ ref 1))))
     (define (lookup-env env id)
-      (dict-ref env id 0))
+      (dict-ref env id -1))
     (define ((var->index env frame) id)
-      (- frame (lookup-env env id))))
+      (- frame (lookup-env env id)))
+    ;; Convert a list of identifiers to it's range and offset
+    ;; (valid because list ids should be consecutive
+    ;; (list symbol) -> (values exact-nonnegative-integer exact-nonnegative-integer)
+    (define (ids->range env frame ids)
+      (define indices (map (var->index env frame) ids))
+      (values (length indices) (car indices))))
   (Lambda : lambda (e [env '()] [frame 0]) -> lambda ()
           [(#%plain-lambda ,formals
                            (free (,id2 ...) (,id3 ...)
@@ -1078,9 +1107,11 @@
         [(#%box ,id) `(#%box ,((var->index env frame) id))]
         [(#%unbox ,id) `(#%unbox ,((var->index env frame) id))]
         [(set!-values (,id ...) ,[expr])
-         `(set!-values (,(map (var->index env frame) id) ...) ,expr)]
+         (define-values (count offset) (ids->range env frame id))
+         `(set!-values ,count ,offset ,expr)]
         [(set!-boxes (,id ...) ,[expr])
-         `(set!-boxes (,(map (var->index env frame) id) ...) ,expr)]
+         (define-values (count offset) (ids->range env frame id))
+         `(set!-boxes ,count ,offset ,expr)]
         [(#%top . ,id) `(#%top . 0)] ;; TODO: Global Vars
         [(#%variable-reference-top (,id)) `(#%variable-reference-top (0))] ;; TODO: Global vars
         [(#%variable-reference ,id) `(#%variable-reference ,((var->index env frame) id))]
@@ -1100,21 +1131,210 @@
             ,(Expr expr env* frame*))]))
 
 (module+ test
-  (define-compiler-test L7
+  (define-compiler-test L7 top-level-form
     (check-equal?
      (compile/9 #'(lambda (x) x))
      `(#%expression (#%plain-lambda 1 #f () () 0)))
     (check-equal?
      (compile/9 #'(let ([x 5])
                     (lambda (y . z) x)))
-     `(let-one '5 (#%plain-lambda 2 #t (0) () 0)))))
+     `(let-one '5 (#%plain-lambda 2 #t (0) () 0)))
+    (check-equal?
+     (compile/9 #'(let ([x 5]
+                        [y 6])
+                    (+ x y)))
+     `(let-void 2
+                (begin
+                  (set!-values 1 0 '5)
+                  (set!-values 1 1 '6)
+                  (#%plain-app 3 0 1))))))
+
+(define-pass find-let-depth : L7 (e) -> L8 ()
+  (Lambda : lambda (e) -> lambda (0)
+          [(#%plain-lambda ,eni1 ,boolean (,eni2 ...) (,eni3 ...) ,[expr depth])
+           (define depth* (+ eni1 (length eni2) depth))
+           (values `(#%plain-lambda ,eni1 ,boolean (,eni2 ...) (,eni3 ...) ,depth* ,expr)
+                   1)])
+  (Expr : expr (e) -> expr (0)
+        [(let-void ,eni ,[expr depth])
+         (values `(let-void ,eni ,expr)
+                 (+ eni depth))]
+        [(let-one ,eni ,[expr depth])
+         (values `(let-one ,eni ,expr)
+                 (+ 1 depth))]
+        [(letrec (,[lambda depth*] ...) ,[expr depth])
+         (values `(letrec (,lambda ...) ,expr)
+                 (+ depth (apply max 0 depth*)))]
+        ;; Everything below this line is boilerplate (except the main body)
+        [(set!-values ,eni1 ,eni2 ,[expr depth])
+         (values `(set!-values ,eni1 ,eni2 ,expr) depth)]
+        [(set!-boxes ,eni1 ,eni2 ,[expr depth])
+         (values `(set!-boxes ,eni1 ,eni2 ,expr) depth)]
+        [(case-lambda ,[lambda depth] ...)
+         (values `(case-lambda ,lambda ...)
+                 (apply max 0 depth))]
+        [(if ,[expr1 depth1] ,[expr2 depth2] ,[expr3 depth3])
+         (values `(if ,expr1 ,expr2 ,expr3)
+                 (max depth1 depth2 depth3))]
+        [(with-continuation-mark ,[expr1 depth1] ,[expr2 depth2] ,[expr3 depth3])
+         (values `(with-continuation-mark ,expr1 ,expr2 ,expr3)
+                 (max depth1 depth2 depth3))]
+        [(#%plain-app ,[expr depth] ,[expr* depth*] ...)
+         (values `(#%plain-app ,expr ,expr* ...)
+                 (apply max depth depth*))])
+  (TopLevelForm : top-level-form (e) -> top-level-form (0)
+                [(#%expression ,[expr depth])
+                 (values `(#%expression ,expr) depth)]
+                [(module ,id ,module-path (,[module-level-form depth] ...))
+                 (values `(module ,id ,module-path (,module-level-form ...))
+                         (apply max 0 depth))]
+                [(begin* ,[top-level-form depth] ...)
+                 (values `(begin* ,top-level-form ...)
+                         (apply max 0 depth))]
+                [(begin-for-syntax* ,[top-level-form depth] ...)
+                 (values `(begin-for-syntax* ,top-level-form ...)
+                         (apply max 0 depth))])
+  (ModuleLevelForm : module-level-form (e) -> module-level-form (0)
+                   [(begin-for-syntax ,[module-level-form depth] ...)
+                    (values `(begin-for-syntax ,module-level-form ...)
+                            (apply max 0 depth))])
+  [SubmoduleForm : submodule-form (e) -> module-level-form (0)
+                 [(submodule ,id ,module-path (,[module-level-form depth] ...))
+                  (values `(submodule ,id ,module-path (,module-level-form ...))
+                          (apply max 0 depth))]
+                 [(submodule* ,id ,module-path (,[module-level-form depth] ...))
+                  (values `(submodule* ,id ,module-path (,module-level-form ...))
+                          (apply max 0 depth))]
+                 [(submodule* ,id (,[module-level-form depth] ...))
+                  (values `(submodule* ,id (,module-level-form ...))
+                          (apply max 0 depth))]]
+  (GeneralTopLevelForm : general-top-level-form (e) -> general-top-level-form (0)
+                       [(define-values (,id ...) ,[expr depth])
+                        (values `(define-values (,id ...) ,expr) depth)]
+                       [(define-syntaxes (,id ...) ,[expr depth])
+                        (values `(define-syntaxes (,id ...) ,expr) depth)])
+  (let-values ([(top depth) (TopLevelForm e)])
+    `(program ,depth ,top)))
+
+(module+ test
+  (define-compiler-test L8 compilation-top
+    (check-equal?
+     (compile/10 #'(lambda (x) (let ([y 5]) (+ x y))))
+     `(program 1 (#%expression
+                  (#%plain-lambda 1 #f () (1) 1 (let-one '5 (#%plain-app 3 1 0))))))
+    (check-equal?
+     (compile/10 #'(if (= 5 6)
+                       (let ([x '5]
+                             [y '6])
+                         y)
+                       (let ([x '6])
+                         x)))
+     `(program 2 (if (#%plain-app 1 '5 '6)
+                     (let-void 2
+                               (begin
+                                 (set!-values 1 0 '5)
+                                 (set!-values 1 1 '6)
+                                 1))
+                     (let-one '6 0))))))
+
+(define tmp-prefix
+  (zo:prefix 0 '() '() 'missing))
+
+(define-pass generate-zo-structs : L8 (e) -> * ()
+  (CompilationTop : compilation-top (e) -> * ()
+                  [(program ,eni ,top-level-form)
+                   (zo:compilation-top eni tmp-prefix (TopLevelForm top-level-form))])
+  (TopLevelForm : top-level-form (e) -> * ()
+                [(#%expression ,expr) (void)]
+                [(module ,id ,module-path (,module-level-form ...))
+                 (void)]
+                [(begin* ,top-level-form ...)
+                 (void)]
+                [(begin-for-syntax* ,top-level-form ...)
+                 (void)])
+  (ModuleLevelForm : module-level-form (e) -> * ()
+                   [(#%provide ,raw-provide-spec ...)
+                    (void)]
+                   [(begin-for-syntax ,module-level-form ...)
+                    (void)]
+                   [(#%declare ,declaration-keyword ...)
+                    (void)])
+  (SubmoduleForm : submodule-form (e) -> * ()
+                 [(submodule ,id ,module-path (,module-level-form ...))
+                  (void)]
+                 [(submodule* ,id ,module-path (,module-level-form ...))
+                  (void)]
+                 [(submodule* ,id (,module-level-form ...))
+                  (void)])
+  (GeneralTopLevelForm : general-top-level-form (e) -> * ()
+                       [(define-values (,id ...) ,expr)
+                        (void)]
+                       [(define-syntaxes (,id ...) ,expr)
+                        (void)]
+                       [(#%require ,raw-require-spec ...)
+                        (void)])
+  (Expr : expr (e) -> * ()
+        [(#%variable-reference-top (,eni))
+         (void)]
+        [(#%variable-reference ,eni)
+         (void)]
+        [(#%top . ,eni) (void)]
+        [(#%unbox ,eni) (void)]
+        [(#%box ,eni)
+         (zo:boxenv eni (void))]
+        [(set!-values ,eni1 ,eni2 ,expr)
+         (void)]
+        [(set!-boxes ,eni1 ,eni2 ,expr)
+         (void)]
+        [(letrec (,lambda ...) ,expr)
+         (void)]
+        [(let-one ,expr1 ,expr)
+         (void)]
+        [(let-void ,eni ,expr)
+         (void)]
+        [,eni eni]
+        [(case-lambda ,lambda ...)
+         (zo:case-lam #() (map Lambda lambda))]
+        [(if ,expr1 ,expr2 ,expr3)
+         (zo:branch (Expr expr1) (Expr expr2) (Expr expr3))]
+        [(begin ,expr* ... ,expr)
+         (zo:seq (append (map Expr expr*)
+                         (list (Expr expr))))]
+        [(begin0 ,expr* ... ,expr)
+         (zo:beg0 (append (map Expr expr*)
+                          (list (Expr expr))))]
+        [(quote ,datum) datum]
+        [(quote-syntax ,datum)
+         (void)]
+        [(with-continuation-mark ,expr1 ,expr2 ,expr3)
+         (zo:with-cont-mark (Expr expr1) (Expr expr2) (Expr expr3))]
+        [(#%plain-app ,expr ,expr* ...)
+         (zo:application (Expr expr) (map Expr expr*))]
+        [(#%variable-reference)
+         (void)])
+  (Lambda : lambda (e) -> * ()
+          [(#%plain-lambda ,eni ,boolean (,eni2 ...) (,eni3 ...) ,eni4 ,expr)
+           (void)]))
+
+(module+ test
+  (define (bytes->compiled-expression zo)
+    (parameterize ([read-accept-compiled #t])
+      (with-input-from-bytes zo
+        (lambda () (read)))))
+  (set! all-compiler-tests
+        (cons
+         (test-suite
+             "Tests for finished compiler"
+           (compile-compare #'42)
+           (compile-compare #'(if #t 5 6)))
+         all-compiler-tests)))
 
 (define-syntax (define-compiler stx)
   (syntax-parse stx
     [(_ name:id passes* ...+)
      (define passes (reverse (syntax->list #'(passes* ...))))
      #`(begin (define name (compose #,@passes))
-              ;(module+ test
+              (module+ test
                 #,@(let build-partial-compiler ([passes passes]
                                                 [pass-count (length passes)])
                      (if (= pass-count 0)
@@ -1125,7 +1345,7 @@
                                      (with-syntax ([name** (format-id stx "~a/~a" #'name (car passes))])
                                        (cons #`(define name** name*)
                                              (build-partial-compiler (cdr passes) (- pass-count 1))))
-                                     (build-partial-compiler (cdr passes) (- pass-count 1)))))))#|)|#)]))
+                                     (build-partial-compiler (cdr passes) (- pass-count 1)))))))))]))
 
 (define (expand-syntax* stx)
   (parameterize ([current-namespace (make-base-namespace)])
@@ -1141,7 +1361,10 @@
   convert-assignments
   uncover-free
   void-lets
-  debruijn-indices)
+  debruijn-indices
+  find-let-depth
+  generate-zo-structs
+  zo-marshal)
 
 (module+ test
   (run-all-compiler-tests))
