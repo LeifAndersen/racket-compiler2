@@ -1178,9 +1178,9 @@
         [(let-void ,eni ,[expr depth])
          (values `(let-void ,eni ,expr)
                  (+ eni depth))]
-        [(let-one ,eni ,[expr depth])
-         (values `(let-one ,eni ,expr)
-                 (+ 1 depth))]
+        [(let-one ,[expr depth] ,[expr1 depth1])
+         (values `(let-one ,expr ,expr1)
+                 (+ 1 (max depth depth1)))]
         [(letrec (,[lambda depth*] ...) ,[expr depth])
          (values `(letrec (,lambda ...) ,expr)
                  (+ depth (apply max 0 depth*)))]
@@ -1240,7 +1240,7 @@
     (check-equal?
      (compile/10 #'(lambda (x) (let ([y 5]) (+ x y))))
      `(program 1 (#%expression
-                  (#%plain-lambda 1 #f () ((primitive 247)) 1 (let-one '5 (#%plain-app (primitive 247) 1 0))))))
+                  (#%plain-lambda 1 #f () ((primitive 247)) 2 (let-one '5 (#%plain-app (primitive 247) 1 0))))))
     (check-equal?
      (compile/10 #'(if (= 5 6)
                        (let ([x '5]
@@ -1297,7 +1297,7 @@
            [(primitive ,eni)
             (zo:primval eni)]]
   (Expr : expr (e) -> * ()
-        [,eni eni]
+        [,eni (zo:localref #f eni #f #f #f)]
         [(primitive ,eni)
          (zo:primval eni)]
         [(#%variable-reference-top (,eni))
@@ -1313,9 +1313,9 @@
         [(set!-boxes ,eni1 ,eni2 ,expr)
          (void)]
         [(letrec (,lambda ...) ,expr)
-         (void)]
+         (zo:let-rec (map Lambda lambda) (Expr expr))]
         [(let-one ,expr1 ,expr)
-         (void)]
+         (zo:let-one (Expr expr1) (Expr expr) #f #f)]
         [(let-void ,eni ,expr)
          (void)]
         [(case-lambda ,lambda ...)
@@ -1347,7 +1347,8 @@
          (test-suite
              "Tests for finished compiler"
            (compile-compare #'42)
-           (compile-compare #'(if #t 5 6)))
+           (compile-compare #'(if #t 5 6))
+           (compile-compare #'((lambda (x) x) 42)))
          all-compiler-tests)))
 
 (define-syntax (define-compiler stx)
@@ -1355,7 +1356,7 @@
     [(_ name:id passes* ...+)
      (define passes (reverse (syntax->list #'(passes* ...))))
      #`(begin (define name (compose #,@passes))
-              (module+ test
+              (begin ;(module+ test
                 #,@(let build-partial-compiler ([passes passes]
                                                 [pass-count (length passes)])
                      (if (= pass-count 0)
