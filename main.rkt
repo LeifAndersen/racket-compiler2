@@ -7,13 +7,19 @@
          racket/dict
          racket/port
          compiler/zo-marshal
-         compiler-goodies
+         rackunit
          (prefix-in zo: compiler/zo-structs)
          (rename-in racket/base
                     [compile base:compile])
          (for-syntax racket/base
                      syntax/parse
                      racket/syntax))
+
+(require/expose compiler/decompile (primitive-table))
+
+(define primitive-table*
+  (for/hash ([(k v) (in-hash primitive-table)])
+    (values v k)))
 
 (define (raw-provide-spec? rps)
   #t)
@@ -75,7 +81,12 @@
     (test-case "Test case for finished compiler"
       (check-equal?
        (eval (bytes->compiled-expression (compile expression)))
-       (eval expression)))))
+       (eval expression))))
+
+  (define (bytes->compiled-expression zo)
+    (parameterize ([read-accept-compiled #t])
+      (with-input-from-bytes zo
+        (lambda () (read))))))
 
 (define-language Lsrc
   (terminals
@@ -240,6 +251,7 @@
            (#%variable-reference id)
            (#%variable-reference-top (id)))
         (+ eni
+           (primitive eni)
            (let-void eni expr)
            (let-one expr1 expr)
            (letrec (lambda ...)
@@ -253,7 +265,10 @@
            (#%variable-reference-top (eni))))
   (lambda (lambda)
     (- (#%plain-lambda formals fbody))
-    (+ (#%plain-lambda eni1 boolean (eni2 ...) (eni3 ...) expr)))
+    (+ (#%plain-lambda eni1 boolean (binding2 ...) (binding3 ...) expr)))
+  (binding (binding)
+           (+ eni
+              (primitive eni)))
   (formals (formals)
            (- id
               (id ...)
@@ -267,8 +282,8 @@
   (compilation-top (compilation-top)
                    (+ (program eni top-level-form)))
   (lambda (lambda)
-    (- (#%plain-lambda eni1 boolean (eni2 ...) (eni3 ...) expr))
-    (+ (#%plain-lambda eni1 boolean (eni2 ...) (eni3 ...) eni4 expr))))
+    (- (#%plain-lambda eni1 boolean (binding2 ...) (binding3 ...) expr))
+    (+ (#%plain-lambda eni1 boolean (binding2 ...) (binding3 ...) eni4 expr))))
 
 ; Grabs set of identifiers out of formals non-terminal in a language
 ; lang formals -> (listof identifiers)
@@ -1151,9 +1166,9 @@
 
 (define-pass find-let-depth : L7 (e) -> L8 ()
   (Lambda : lambda (e) -> lambda (0)
-          [(#%plain-lambda ,eni1 ,boolean (,eni2 ...) (,eni3 ...) ,[expr depth])
-           (define depth* (+ eni1 (length eni2) depth))
-           (values `(#%plain-lambda ,eni1 ,boolean (,eni2 ...) (,eni3 ...) ,depth* ,expr)
+          [(#%plain-lambda ,eni1 ,boolean (,binding2 ...) (,binding3 ...) ,[expr depth])
+           (define depth* (+ eni1 (length binding2) depth))
+           (values `(#%plain-lambda ,eni1 ,boolean (,binding2 ...) (,binding3 ...) ,depth* ,expr)
                    1)])
   (Expr : expr (e) -> expr (0)
         [(let-void ,eni ,[expr depth])
@@ -1243,7 +1258,7 @@
 (define-pass generate-zo-structs : L8 (e) -> * ()
   (CompilationTop : compilation-top (e) -> * ()
                   [(program ,eni ,top-level-form)
-                   (zo:compilation-top eni tmp-prefix (TopLevelForm top-level-form))])
+                   (zo:compilation-top eni (hash) tmp-prefix (TopLevelForm top-level-form))])
   (TopLevelForm : top-level-form (e) -> * ()
                 [(#%expression ,expr) (void)]
                 [(module ,id ,module-path (,module-level-form ...))
@@ -1293,6 +1308,8 @@
         [(let-void ,eni ,expr)
          (void)]
         [,eni eni]
+        [(primitive ,eni)
+         (zo:primval eni)]
         [(case-lambda ,lambda ...)
          (zo:case-lam #() (map Lambda lambda))]
         [(if ,expr1 ,expr2 ,expr3)
@@ -1313,14 +1330,10 @@
         [(#%variable-reference)
          (void)])
   (Lambda : lambda (e) -> * ()
-          [(#%plain-lambda ,eni ,boolean (,eni2 ...) (,eni3 ...) ,eni4 ,expr)
+          [(#%plain-lambda ,eni ,boolean (,binding2 ...) (,binding3 ...) ,eni4 ,expr)
            (void)]))
 
 (module+ test
-  (define (bytes->compiled-expression zo)
-    (parameterize ([read-accept-compiled #t])
-      (with-input-from-bytes zo
-        (lambda () (read)))))
   (set! all-compiler-tests
         (cons
          (test-suite
@@ -1342,7 +1355,10 @@
                          (with-syntax ([name* (format-id stx "~a/~a" #'name (- pass-count 1))])
                            (cons #`(define name* (compose #,@passes))
                                  (if (identifier? (car passes))
-                                     (with-syntax ([name** (format-id stx "~a/~a" #'name (car passes))])
+                                     (with-syntax ([name** (format-id stx
+                                                                      "~a/~a"
+                                                                      #'name
+                                                                      (car passes))])
                                        (cons #`(define name** name*)
                                              (build-partial-compiler (cdr passes) (- pass-count 1))))
                                      (build-partial-compiler (cdr passes) (- pass-count 1)))))))))]))
