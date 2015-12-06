@@ -250,7 +250,7 @@
            (#%top . id)
            (#%variable-reference id)
            (#%variable-reference-top (id)))
-        (+ eni
+        (+ binding
            (primitive eni)
            (let-void eni expr)
            (let-one expr1 expr)
@@ -1096,9 +1096,12 @@
                 ([i ids])
         (values (dict-set env i (+ ref 1)) (+ ref 1))))
     (define (lookup-env env id)
-      (dict-ref env id -1))
+      (dict-ref env id))
     (define ((var->index env frame) id)
-      (- frame (lookup-env env id)))
+      (if (dict-has-key? env id)
+          (- frame (lookup-env env id))
+          (with-output-language (L7 binding)
+            `(primitive ,(dict-ref primitive-table* id)))))
     ;; Convert a list of identifiers to it's range and offset
     ;; (valid because list ids should be consecutive
     ;; (list symbol) -> (values exact-nonnegative-integer exact-nonnegative-integer)
@@ -1162,14 +1165,15 @@
                 (begin
                   (set!-values 1 0 '5)
                   (set!-values 1 1 '6)
-                  (#%plain-app 3 0 1))))))
+                  (#%plain-app (primitive 247) 0 1))))))
 
 (define-pass find-let-depth : L7 (e) -> L8 ()
   (Lambda : lambda (e) -> lambda (0)
-          [(#%plain-lambda ,eni1 ,boolean (,binding2 ...) (,binding3 ...) ,[expr depth])
+          [(#%plain-lambda ,eni1 ,boolean (,[binding2] ...) (,[binding3] ...) ,[expr depth])
            (define depth* (+ eni1 (length binding2) depth))
            (values `(#%plain-lambda ,eni1 ,boolean (,binding2 ...) (,binding3 ...) ,depth* ,expr)
                    1)])
+  [Binding : binding (e) -> binding (0)]
   (Expr : expr (e) -> expr (0)
         [(let-void ,eni ,[expr depth])
          (values `(let-void ,eni ,expr)
@@ -1236,7 +1240,7 @@
     (check-equal?
      (compile/10 #'(lambda (x) (let ([y 5]) (+ x y))))
      `(program 1 (#%expression
-                  (#%plain-lambda 1 #f () (1) 1 (let-one '5 (#%plain-app 3 1 0))))))
+                  (#%plain-lambda 1 #f () ((primitive 247)) 1 (let-one '5 (#%plain-app (primitive 247) 1 0))))))
     (check-equal?
      (compile/10 #'(if (= 5 6)
                        (let ([x '5]
@@ -1244,7 +1248,7 @@
                          y)
                        (let ([x '6])
                          x)))
-     `(program 2 (if (#%plain-app 1 '5 '6)
+     `(program 2 (if (#%plain-app (primitive 256) '5 '6)
                      (let-void 2
                                (begin
                                  (set!-values 1 0 '5)
@@ -1288,7 +1292,14 @@
                         (void)]
                        [(#%require ,raw-require-spec ...)
                         (void)])
+  [Binding : binding (e) -> * ()
+           [,eni eni]
+           [(primitive ,eni)
+            (zo:primval eni)]]
   (Expr : expr (e) -> * ()
+        [,eni eni]
+        [(primitive ,eni)
+         (zo:primval eni)]
         [(#%variable-reference-top (,eni))
          (void)]
         [(#%variable-reference ,eni)
@@ -1307,9 +1318,6 @@
          (void)]
         [(let-void ,eni ,expr)
          (void)]
-        [,eni eni]
-        [(primitive ,eni)
-         (zo:primval eni)]
         [(case-lambda ,lambda ...)
          (zo:case-lam #() (map Lambda lambda))]
         [(if ,expr1 ,expr2 ,expr3)
