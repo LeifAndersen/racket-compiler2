@@ -57,6 +57,6 @@ script:
 
 after_success:
   - raco setup --check-deps zordoz
-  - raco pkg install cover
-  - raco pkg install cover-coveralls
+  - raco pkg install --deps search-auto cover
+  - raco pkg install --deps search-auto cover-coveralls
   - raco cover -b -f coveralls -d $TRAVIS_BUILD_DIR/coverage .
