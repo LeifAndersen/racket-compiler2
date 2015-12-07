@@ -6,6 +6,7 @@
          racket/set
          racket/dict
          racket/port
+         racket/list
          compiler/zo-marshal
          rackunit
          (prefix-in zo: compiler/zo-structs)
@@ -1048,7 +1049,49 @@
      `(letrec ([f.1 (#%plain-lambda (x.2) (free () () x.2))])
         (#%plain-app f.1 '12)))))
 
-(define-pass closurify-letrec : L5 (e) -> L6 ())
+(define-pass closurify-letrec : L5 (e) -> L6 ()
+  (definitions
+    (define (remove-index l index)
+      (append (take l index) (drop l (+ 1 index)))))
+  (Formals : formals (e) -> formals ())
+  [Expr : expr (e) -> expr ()
+        [(letrec () ,[expr])
+         expr]
+        [(letrec ([,id (#%plain-lambda ,formals (free (,id1* ...) (,id2* ...) ,expr*))] ...)
+           ,expr)
+         (define empty-index
+           (for/fold ([acc #f])
+                     ([i (in-list id1*)]
+                      [iter (in-range (length id1*))])
+             (if (null? i) iter acc)))
+         (if empty-index
+             `(let ([,(list-ref id empty-index)
+                     (closure ,(list-ref id empty-index)
+                              ,(Expr (with-output-language (L5 expr)
+                                       `(#%plain-lambda ,(list-ref formals empty-index)
+                                                        (free (,(list-ref id1* empty-index) ...)
+                                                              (,(list-ref id2* empty-index) ...)
+                                                              ,(list-ref expr* empty-index))))))])
+                ,(Expr (with-output-language (L5 expr)
+                         `(letrec ([,(remove-index id empty-index)
+                                    (#%plain-lambda ,(remove-index formals empty-index)
+                                                    (free (,(remove-index id1* empty-index) ...)
+                                                          (,(remove-index id2* empty-index) ...)
+                                                          ,(remove-index expr* empty-index)))]
+                                   ...)
+                            ,expr))))
+             `(letrec ([,id (#%plain-lambda ,(map Formals formals)
+                                            (free (,id1* ...) (,id2* ...)
+                                                  ,(map Expr expr*)))] ...)
+                ,(Expr expr)))]])
+
+(module+ test
+  (define-compiler-test L6 top-level-form
+    (check-equal?
+     (compile/8 #'(letrec ([f (lambda (x) x)])
+                    (f 12)))
+     `(let ([f.1 (closure f.1 (#%plain-lambda (x.2) (free () () x.2)))])
+        (#%plain-app f.1 '12)))))
 
 (define-pass void-lets : L6 (e) -> L7 ()
   (Expr : expr (e) -> expr ()
@@ -1209,6 +1252,8 @@
                    1)])
   [Binding : binding (e) -> binding (0)]
   (Expr : expr (e) -> expr (0)
+        [(closure ,id ,[lambda depth])
+         (values `(closure ,id ,lambda) depth)]
         [(let-void ,eni ,[expr depth])
          (values `(let-void ,eni ,expr)
                  (+ eni depth))]
@@ -1336,7 +1381,7 @@
             (zo:primval eni)]]
   (Expr : expr (e) -> * ()
         [,eni (zo:localref #f eni #f #f #f)]
-        [(closure ,id ,lambda) (void)]
+        [(closure ,id ,lambda) (zo:closure (Lambda lambda) id)]
         [(primitive ,eni)
          (zo:primval eni)]
         [(#%variable-reference-top (,eni))
