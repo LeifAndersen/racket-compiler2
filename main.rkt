@@ -77,11 +77,14 @@
       (void)))
 
   ;; Compare result of current compiler to regular compiler
-  (define-syntax-rule (compile-compare expression)
-    (test-case "Test case for finished compiler"
-      (check-equal?
-       (eval (bytes->compiled-expression (compile expression)))
-       (eval expression)))))
+  (define-syntax (compile-compare stx)
+    (syntax-case stx ()
+      [(_ expression)
+       #`(test-case "Test case for finished compiler"
+           #,(syntax/loc stx
+               (check-equal?
+                (eval (bytes->compiled-expression (compile expression)))
+                (eval expression))))])))
 
 ; TODO Move back into test submodule.
 (define (bytes->compiled-expression zo)
@@ -908,13 +911,17 @@
            ,expr**)
          (define env* (set-union env id*))
          (define-values (expr free-local free-global) (Expr expr** env*))
-         (define-values (lambda* free-local* free-global*) (for/list ([i (in-list lambda**)])
-                                                           (Lambda i env*)))
-         (values
-          `(letrec ([,id* ,lambda*] ...)
-             ,expr)
-          (set-subtract (apply set-union free-local free-local*) id*)
-          (apply set-union free-global free-global*))]
+         (define-values (lambda* free-local* free-global*)
+           (for/fold ([lambda* null]
+                      [free-local* null]
+                      [free-global* null])
+                     ([i (in-list lambda**)])
+             (define-values (l fl fg) (Lambda i env*))
+             (values (cons l lambda*) (cons fl free-local*) (cons fg free-global*))))
+         (values `(letrec ([,id* ,(reverse lambda*)] ...)
+                    ,expr)
+                 (apply set-union (set-subtract free-local id*) (reverse free-local*))
+                 (apply set-union (set-subtract free-global id*) (reverse free-global*)))]
         [(set!-boxes (,id) ,[expr free-local free-global])
          (if (set-member? env id)
              (values `(set!-boxes (,id) ,expr) (set-add free-local id) free-global)
@@ -1029,10 +1036,22 @@
                     (set! x 6)))
      `(begin*
         (define-values (x) '5)
-        (set!-values (x) '6)))))
+        (set!-values (x) '6)))
+    (check-equal?
+     (compile/7 #'(letrec ([f (lambda (x) x)])
+                    (f 12)))
+     `(letrec ([f.1 (#%plain-lambda (x.2) (free () () x.2))])
+        (#%plain-app f.1 '12)))))
+
+;(define-pass closurify-letrec : L5 (e) -> L6 ())
 
 (define-pass void-lets : L5 (e) -> L6 ()
   (Expr : expr (e) -> expr ()
+        [(letrec ([,id ,[lambda]] ...)
+           ,[expr])
+         `(let-void (,id ...)
+                    (letrec ([,id ,lambda] ...)
+                      ,expr))]
         [(let ([,id ,[expr1]]) ,[expr])
          `(let ([,id ,expr1]) ,expr)]
         [(let ([,id (undefined)] ...) ,[expr])
@@ -1143,11 +1162,14 @@
          (define-values (env* frame*) (extend-env env frame (reverse id)))
          `(let-void ,(length id)
                     ,(Expr expr env* frame*))]
-        [(letrec ([,id ,lambda] ...)
-           ,expr)
-         (define-values (env* frame*) (extend-env env frame (reverse id)))
-         `(letrec (,(Lambda lambda env* frame*) ...)
-            ,(Expr expr env* frame*))]))
+        [(letrec ([,id ,[lambda]] ...)
+           ,[expr])
+         `(letrec (,lambda ...)
+            ,expr)]
+        [(#%plain-app ,expr ,expr* ...)
+         (define expr1 (Expr expr env (+ frame (length expr*))))
+         (define expr*1 (map (lambda (e) (Expr e env (+ frame (length expr*)))) expr*))
+         `(#%plain-app ,expr1 ,expr*1 ...)]))
 
 (module+ test
   (define-compiler-test L7 top-level-form
@@ -1166,13 +1188,19 @@
                 (begin
                   (set!-values 1 0 '5)
                   (set!-values 1 1 '6)
-                  (#%plain-app (primitive 247) 0 1))))))
+                  (#%plain-app (primitive 247) 2 3))))))
 
 (define-pass find-let-depth : L7 (e) -> L8 ()
   (Lambda : lambda (e) -> lambda (0)
           [(#%plain-lambda ,eni1 ,boolean (,[binding2] ...) (,[binding3] ...) ,[expr depth])
            (define depth* (+ eni1 (length binding2) depth))
-           (values `(#%plain-lambda ,eni1 ,boolean (,binding2 ...) (,binding3 ...) ,depth* ,expr)
+           (values `(#%plain-lambda ,eni1 ,boolean (,binding2 ...) (,binding3 ...) ,(+ 5
+                                                                                       eni1
+                                                                                       (if boolean 1 0)
+                                                                                       (length binding2)
+                                                                                       (length binding3)
+                                                                                       depth*)
+                                    ,expr)
                    1)])
   [Binding : binding (e) -> binding (0)]
   (Expr : expr (e) -> expr (0)
@@ -1184,7 +1212,7 @@
                  (+ 1 (max depth depth1)))]
         [(letrec (,[lambda depth*] ...) ,[expr depth])
          (values `(letrec (,lambda ...) ,expr)
-                 (+ depth (apply max 0 depth*)))]
+                 (+ depth (length lambda) (apply max 0 depth*)))]
         ;; Everything below this line is boilerplate (except the main body)
         [(set!-values ,eni1 ,eni2 ,[expr depth])
          (values `(set!-values ,eni1 ,eni2 ,expr) depth)]
@@ -1201,7 +1229,7 @@
                  (max depth1 depth2 depth3))]
         [(#%plain-app ,[expr depth] ,[expr* depth*] ...)
          (values `(#%plain-app ,expr ,expr* ...)
-                 (apply max depth depth*))])
+                 (+ (length depth*) (apply max depth depth*)))])
   (TopLevelForm : top-level-form (e) -> top-level-form (0)
                 [(#%expression ,[expr depth])
                  (values `(#%expression ,expr) depth)]
@@ -1241,7 +1269,7 @@
     (check-equal?
      (compile/10 #'(lambda (x) (let ([y 5]) (+ x y))))
      `(program 1 (#%expression
-                  (#%plain-lambda 1 #f () ((primitive 247)) 2 (let-one '5 (#%plain-app (primitive 247) 1 0))))))
+                  (#%plain-lambda 1 #f () ((primitive 247)) 11 (let-one '5 (#%plain-app (primitive 247) 3 2))))))
     (check-equal?
      (compile/10 #'(if (= 5 6)
                        (let ([x '5]
@@ -1268,7 +1296,8 @@
                   [(program ,eni ,top-level-form)
                    (zo:compilation-top eni (hash) tmp-prefix (TopLevelForm top-level-form))])
   (TopLevelForm : top-level-form (e) -> * ()
-                [(#%expression ,expr) (void)]
+                [(#%expression ,expr)
+                 (Expr expr)]
                 [(module ,id ,module-path (,module-level-form ...))
                  (void)]
                 [(begin* ,top-level-form ...)
@@ -1326,12 +1355,15 @@
          (zo:install-value eni1 eni2 #f (Expr expr) zo-void)]
         [(set!-boxes ,eni1 ,eni2 ,expr)
          (zo:install-value eni1 eni2 #t (Expr expr) zo-void)]
+        ;[(letrec (,lambda) ,expr)
+        ; (zo:closure (Lambda lambda)
+        ;             (gensym))]
         [(letrec (,lambda ...) ,expr)
          (zo:let-rec (map Lambda lambda) (Expr expr))]
         [(let-one ,expr1 ,expr)
          (zo:let-one (Expr expr1) (Expr expr) #f #f)]
         [(let-void ,eni ,expr)
-         (void)]
+         (zo:let-void eni #f (Expr expr))]
         [(case-lambda ,lambda ...)
          (zo:case-lam #() (map Lambda lambda))]
         [(if ,expr1 ,expr2 ,expr3)
@@ -1373,11 +1405,20 @@
            (compile-compare #'42)
            (compile-compare #'(if #t 5 6))
            (compile-compare #'((lambda (x) x) 42))
+           (compile-compare #'((lambda (x) (+ x 5)) 84))
+           (compile-compare #'(((lambda (x) (lambda (y) (+ x y))) 2) 3))
            (compile-compare #'(let ([x (lambda () 42)])
                                 (x)))
            (compile-compare #'(let ([x 5])
                                 (set! x 6)
-                                x)))
+                                x))
+           (compile-compare #'(letrec ([f (lambda (x) x)])
+                                (f 12)))
+           (compile-compare #'(letrec ([fact (lambda (x)
+                                               (if (x . <= . 0)
+                                                   1
+                                                   (* x (fact (- x 1)))))])
+                                (fact 5))))
          all-compiler-tests)))
 
 (define-syntax (define-compiler stx)
