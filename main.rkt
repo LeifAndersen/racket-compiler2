@@ -74,7 +74,9 @@
   ;; Run all tests defined with define-compiler-test
   (define-syntax-rule (run-all-compiler-tests)
     (let ()
-      (map run-tests all-compiler-tests)
+      (define res (map run-tests all-compiler-tests))
+      (exit-handler (lambda (code)
+                      (max code (min (apply + res) 255))))
       (void)))
 
   ;; Compare result of current compiler to regular compiler
