@@ -231,13 +231,18 @@
 (define-language L6
   (extends L5)
   (expr (expr)
+        (+ (closure id lambda))))
+
+(define-language L7
+  (extends L6)
+  (expr (expr)
         (- (let ([id expr1] ...) expr)
            (undefined))
         (+ (let ([id expr1]) expr)
            (let-void (id ...) expr))))
 
-(define-language L7
-  (extends L6)
+(define-language L8
+  (extends L7)
   (terminals
    (+ (exact-nonnegative-integer (exact-nonnegative-integer eni))
       (boolean (boolean))))
@@ -280,8 +285,8 @@
   (free-body (fbody)
              (- (free (id ...) (id* ...) expr))))
 
-(define-language L8
-  (extends L7)
+(define-language L9
+  (extends L8)
   (entry compilation-top)
   (compilation-top (compilation-top)
                    (+ (program eni top-level-form)))
@@ -1043,9 +1048,9 @@
      `(letrec ([f.1 (#%plain-lambda (x.2) (free () () x.2))])
         (#%plain-app f.1 '12)))))
 
-;(define-pass closurify-letrec : L5 (e) -> L6 ())
+(define-pass closurify-letrec : L5 (e) -> L6 ())
 
-(define-pass void-lets : L5 (e) -> L6 ()
+(define-pass void-lets : L6 (e) -> L7 ()
   (Expr : expr (e) -> expr ()
         [(letrec ([,id ,[lambda]] ...)
            ,[expr])
@@ -1064,12 +1069,12 @@
                       ,expr))]))
 
 (module+ test
-  (define-compiler-test L6 top-level-form
+  (define-compiler-test L7 top-level-form
     (check-equal?
-     (compile/8 #'(let ([x 1]) x))
+     (compile/9 #'(let ([x 1]) x))
      `(let ([x.1 '1]) x.1))
     (check-equal?
-     (compile/8 #'(let ([x 1]
+     (compile/9 #'(let ([x 1]
                         [y 2])
                     (+ x y)))
      `(let-void (x.1 y.2)
@@ -1078,7 +1083,7 @@
                   (set!-values (y.2) '2)
                   (#%plain-app + x.1 y.2))))
     (check-equal?
-     (compile/8 #'(let-values ([(x y) (values 1 2)]
+     (compile/9 #'(let-values ([(x y) (values 1 2)]
                                [(z) 3])
                     (set! x 5)
                     (+ x y z)))
@@ -1092,7 +1097,7 @@
                       (set!-boxes (x.1) '5)
                       (#%plain-app + (#%unbox x.1) y.2 z.3))))))
     (check-equal?
-     (compile/8 #'(let ([x 5])
+     (compile/9 #'(let ([x 5])
                     (lambda (y)
                       (set! x 6)
                       (+ x y))))
@@ -1105,12 +1110,12 @@
                                   (set!-boxes (x.1) '6)
                                   (#%plain-app + (#%unbox x.1) y.2)))))))))
 
-(define-pass debruijn-indices : L6 (e) -> L7 ()
+(define-pass debruijn-indices : L7 (e) -> L8 ()
   (definitions
     (define-syntax-rule (formals->identifiers* fmls)
-      (formals->identifiers L6 fmls))
+      (formals->identifiers L7 fmls))
     (define-syntax-rule (formals-rest?* fmls)
-      (formals-rest? L6 fmls))
+      (formals-rest? L7 fmls))
     (define (extend-env env start ids)
       (for/fold ([env env] [ref start])
                 ([i ids])
@@ -1120,7 +1125,7 @@
     (define ((var->index env frame) id)
       (if (dict-has-key? env id)
           (- frame (lookup-env env id))
-          (with-output-language (L7 binding)
+          (with-output-language (L8 binding)
             `(primitive ,(dict-ref primitive-table* id)))))
     ;; Convert a list of identifiers to it's range and offset
     ;; (valid because list ids should be consecutive
@@ -1172,16 +1177,16 @@
          `(#%plain-app ,expr1 ,expr*1 ...)]))
 
 (module+ test
-  (define-compiler-test L7 top-level-form
+  (define-compiler-test L8 top-level-form
     (check-equal?
-     (compile/9 #'(lambda (x) x))
+     (compile/10 #'(lambda (x) x))
      `(#%expression (#%plain-lambda 1 #f () () 0)))
     (check-equal?
-     (compile/9 #'(let ([x 5])
+     (compile/10 #'(let ([x 5])
                     (lambda (y . z) x)))
      `(let-one '5 (#%plain-lambda 2 #t (0) () 0)))
     (check-equal?
-     (compile/9 #'(let ([x 5]
+     (compile/10 #'(let ([x 5]
                         [y 6])
                     (+ x y)))
      `(let-void 2
@@ -1190,7 +1195,7 @@
                   (set!-values 1 1 '6)
                   (#%plain-app (primitive 247) 2 3))))))
 
-(define-pass find-let-depth : L7 (e) -> L8 ()
+(define-pass find-let-depth : L8 (e) -> L9 ()
   (Lambda : lambda (e) -> lambda (0)
           [(#%plain-lambda ,eni1 ,boolean (,[binding2] ...) (,[binding3] ...) ,[expr depth])
            (define depth* (+ eni1 (length binding2) depth))
@@ -1265,13 +1270,13 @@
     `(program ,depth ,top)))
 
 (module+ test
-  (define-compiler-test L8 compilation-top
+  (define-compiler-test L9 compilation-top
     (check-equal?
-     (compile/10 #'(lambda (x) (let ([y 5]) (+ x y))))
+     (compile/11 #'(lambda (x) (let ([y 5]) (+ x y))))
      `(program 1 (#%expression
                   (#%plain-lambda 1 #f () ((primitive 247)) 11 (let-one '5 (#%plain-app (primitive 247) 3 2))))))
     (check-equal?
-     (compile/10 #'(if (= 5 6)
+     (compile/11 #'(if (= 5 6)
                        (let ([x '5]
                              [y '6])
                          y)
@@ -1288,7 +1293,7 @@
 (define tmp-prefix
   (zo:prefix 0 '() '() 'missing))
 
-(define-pass generate-zo-structs : L8 (e) -> * ()
+(define-pass generate-zo-structs : L9 (e) -> * ()
   (definitions
     (define zo-void
       (zo:primval 35)))
@@ -1331,6 +1336,7 @@
             (zo:primval eni)]]
   (Expr : expr (e) -> * ()
         [,eni (zo:localref #f eni #f #f #f)]
+        [(closure ,id ,lambda) (void)]
         [(primitive ,eni)
          (zo:primval eni)]
         [(#%variable-reference-top (,eni))
@@ -1455,6 +1461,7 @@
   optimize-direct-call
   convert-assignments
   uncover-free
+  closurify-letrec
   void-lets
   debruijn-indices
   find-let-depth
