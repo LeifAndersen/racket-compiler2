@@ -81,12 +81,13 @@
     (test-case "Test case for finished compiler"
       (check-equal?
        (eval (bytes->compiled-expression (compile expression)))
-       (eval expression))))
+       (eval expression)))))
 
-  (define (bytes->compiled-expression zo)
-    (parameterize ([read-accept-compiled #t])
-      (with-input-from-bytes zo
-        (lambda () (read))))))
+; TODO Move back into test submodule.
+(define (bytes->compiled-expression zo)
+  (parameterize ([read-accept-compiled #t])
+    (with-input-from-bytes zo
+      (lambda () (read)))))
 
 (define-language Lsrc
   (terminals
@@ -1260,6 +1261,9 @@
   (zo:prefix 0 '() '() 'missing))
 
 (define-pass generate-zo-structs : L8 (e) -> * ()
+  (definitions
+    (define zo-void
+      (zo:primval 35)))
   (CompilationTop : compilation-top (e) -> * ()
                   [(program ,eni ,top-level-form)
                    (zo:compilation-top eni (hash) tmp-prefix (TopLevelForm top-level-form))])
@@ -1305,13 +1309,23 @@
         [(#%variable-reference ,eni)
          (void)]
         [(#%top . ,eni) (void)]
-        [(#%unbox ,eni) (void)]
+        [(#%unbox ,eni)
+         (zo:localref #t eni #f #f #f)]
         [(#%box ,eni)
-         (zo:boxenv eni (void))]
+         (zo:boxenv eni zo-void)]
+        [(begin
+           (set!-values ,eni1 ,eni2 (#%box ,eni3))
+           ,expr)
+         (guard (and (= eni2 eni3) (= eni1 1)))
+         (zo:boxenv eni2 (Expr expr))]
+        [(begin
+           (set!-boxes ,eni1 ,eni2 ,expr)
+           ,expr*)
+         (zo:install-value eni1 eni2 #t (Expr expr) (Expr expr*))]
         [(set!-values ,eni1 ,eni2 ,expr)
-         (void)]
+         (zo:install-value eni1 eni2 #f (Expr expr) zo-void)]
         [(set!-boxes ,eni1 ,eni2 ,expr)
-         (void)]
+         (zo:install-value eni1 eni2 #t (Expr expr) zo-void)]
         [(letrec (,lambda ...) ,expr)
          (zo:let-rec (map Lambda lambda) (Expr expr))]
         [(let-one ,expr1 ,expr)
@@ -1339,7 +1353,17 @@
          (void)])
   (Lambda : lambda (e) -> * ()
           [(#%plain-lambda ,eni ,boolean (,binding2 ...) (,binding3 ...) ,eni4 ,expr)
-           (void)]))
+           (zo:lam (gensym)
+                   null
+                   (if boolean (- eni 1) eni)
+                   (for/list ([i (in-range (if boolean (- eni 1) eni))])
+                     'val)
+                   boolean
+                   (list->vector binding2)
+                   (map (lambda (x) 'val/ref) binding2)
+                   #f
+                   eni4
+                   (Expr expr))]))
 
 (module+ test
   (set! all-compiler-tests
@@ -1348,7 +1372,12 @@
              "Tests for finished compiler"
            (compile-compare #'42)
            (compile-compare #'(if #t 5 6))
-           (compile-compare #'((lambda (x) x) 42)))
+           (compile-compare #'((lambda (x) x) 42))
+           (compile-compare #'(let ([x (lambda () 42)])
+                                (x)))
+           (compile-compare #'(let ([x 5])
+                                (set! x 6)
+                                x)))
          all-compiler-tests)))
 
 (define-syntax (define-compiler stx)
