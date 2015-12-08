@@ -334,13 +334,13 @@
                   (#%plain-module-begin body ...))
                 (define env* (extend-env env (list #'id)))
                 `(module ,(syntax->datum #'id) ,(syntax->datum #'path)
-                   (,(for/list ([i (syntax->list #'(body ...))])
+                   (,(for/list ([i (in-list (syntax->list #'(body ...)))])
                       (parse-mod i env*)) ...))]
                [(begin body ...)
-                `(begin* ,(for/list ([i (syntax->list #'(body ...))])
+                `(begin* ,(for/list ([i (in-list (syntax->list #'(body ...)))])
                             (parse-top i env)) ...)]
                [(begin-for-syntax body ...)
-                `(begin-for-syntax* ,(for/list ([i (syntax->list #'(body ...))])
+                `(begin-for-syntax* ,(for/list ([i (in-list (syntax->list #'(body ...)))])
                                        (parse-top i env)) ...)]
                [else
                 (parse-gen #'else env)]))
@@ -352,7 +352,7 @@
                [(#%provide spec ...)
                 `(#%provide ,(syntax->list #'(spec ...)) ...)]
                [(begin-for-syntax body ...)
-                `(begin-for-syntax ,(for/list ([i (syntax->list #'(body ...))])
+                `(begin-for-syntax ,(for/list ([i (in-list (syntax->list #'(body ...)))])
                                       (parse-mod i env)) ...)]
                [(#%declare keyword ...)
                 `(#%declare ,(syntax->list #'(keyword ...)) ...)]
@@ -360,19 +360,19 @@
                   (#%plain-module-begin body ...))
                 (define env* (extend-env env (list #'id)))
                 `(submodule ,(syntax->datum #'id) ,(syntax->datum #'path)
-                            (,(for/list ([i (syntax->list #'(body ...))])
+                            (,(for/list ([i (in-list (syntax->list #'(body ...)))])
                                 (parse-mod i env*)) ...))]
                [(module* id:id path
                   (#%plain-module-begin body ...))
                 (define env* (extend-env env (list #'id)))
                 `(submodule* ,(syntax->datum #'id) ,(syntax->datum #'path)
-                             (,(for/list ([i (syntax->list #'(body ...))])
+                             (,(for/list ([i (in-list (syntax->list #'(body ...)))])
                                  (parse-mod i env*)) ...))]
                [(module* id:id path
                   (#%plain-module-begin body ...))
                 (define env* (extend-env env (list #'id)))
                 `(submodule* ,(syntax->datum #'id)
-                             (,(for/list ([i (syntax->list #'(body ...))])
+                             (,(for/list ([i (in-list (syntax->list #'(body ...)))])
                                  (parse-mod i env*)) ...))]
                [else
                 (parse-gen #'else env)]))
@@ -382,12 +382,12 @@
                #:literals (define-values define-syntaxes #%require)
                [(define-values (id:id ...) body)
                 ;(define env* (extend-env env (syntax->list #'(id ...))))
-                `(define-values (,(for/list ([i (syntax->list #'(id ...))])
+                `(define-values (,(for/list ([i (in-list (syntax->list #'(id ...)))])
                                    (parse-expr i env)) ...)
                    ,(parse-expr #'body env))]
                [(define-syntaxes (id:id ...) body)
                 ;(define env* (extend-env env (syntax->list #'(id ...))))
-                `(define-syntaxes (,(for/list ([i (syntax->list #'(id ...))])
+                `(define-syntaxes (,(for/list ([i (in-list (syntax->list #'(id ...)))])
                                      (parse-expr i env)) ...)
                    ,(parse-expr #'body env))]
                [(#%require spec ...)
@@ -404,16 +404,16 @@
                 [(#%plain-lambda formals body* ... body)
                  (define-values (formals* env*) (parse-formals #'formals env))
                  `(#%plain-lambda ,formals*
-                                  ,(for/list ([b (syntax->list #'(body* ...))])
+                                  ,(for/list ([b (in-list (syntax->list #'(body* ...)))])
                                      (parse-expr b env*)) ...
                                   ,(parse-expr #'body env*))]
                 [(case-lambda (formals body* ... body) ...)
-                 (match (for/list ([formal (syntax->list #'(formals ...))]
-                                   [b1 (syntax->list #'(body ...))]
-                                   [b (syntax->list #'((body* ...) ...))])
+                 (match (for/list ([formal (in-list (syntax->list #'(formals ...)))]
+                                   [b1 (in-list (syntax->list #'(body ...)))]
+                                   [b (in-list (syntax->list #'((body* ...) ...)))])
                           (define-values (formals* env*) (parse-formals formal env))
                           (list formals*
-                                (for/list ([b* (syntax->list b)])
+                                (for/list ([b* (in-list (syntax->list b))])
                                   (parse-expr b* env*))
                                 (parse-expr b1 env*)))
                    [`((,formal ,body* ,body) ...)
@@ -423,11 +423,11 @@
                       ,(parse-expr #'tbranch env)
                       ,(parse-expr #'fbranch env))]
                 [(begin body* ... body)
-                 `(begin ,(for/list ([b (syntax->list #'(body* ...))])
+                 `(begin ,(for/list ([b (in-list (syntax->list #'(body* ...)))])
                             (parse-expr b env)) ...
                          ,(parse-expr #'body env))]
                 [(begin0 body* ... body)
-                 `(begin0 ,(for/list ([b (syntax->list #'(body* ...))])
+                 `(begin0 ,(for/list ([b (in-list (syntax->list #'(body* ...)))])
                              (parse-expr b env)) ...
                           ,(parse-expr #'body env))]
                 [(let-values ([(ids:id ...) val] ...)
@@ -436,13 +436,13 @@
                                           (apply
                                            append
                                            (map syntax->list (syntax->list #'((ids ...) ...))))))
-                 (match (for/list ([i (syntax->list #'((ids ...) ...))]
-                                   [v (syntax->list #'(val ...))])
+                 (match (for/list ([i (in-list (syntax->list #'((ids ...) ...)))]
+                                   [v (in-list (syntax->list #'(val ...)))])
                           (list (map (lookup-env env*) (syntax->list i))
                                 (parse-expr v env)))
                    [`([(,args ...) ,exp] ...)
                     `(let-values ([(,args ...) ,exp] ...)
-                       ,(for/list ([b (syntax->list #'(body* ...))])
+                       ,(for/list ([b (in-list (syntax->list #'(body* ...)))])
                           (parse-expr b env*)) ...
                        ,(parse-expr #'body env*))])]
                 [(letrec-values ([(ids:id ...) val] ...)
@@ -451,13 +451,13 @@
                                           (apply
                                            append
                                            (map syntax->list (syntax->list #'((ids ...) ...))))))
-                 (match (for/list ([i (syntax->list #'((ids ...) ...))]
-                                   [v (syntax->list #'(val ...))])
+                 (match (for/list ([i (in-list (syntax->list #'((ids ...) ...)))]
+                                   [v (in-list (syntax->list #'(val ...)))])
                           (list (map (lookup-env env*) (syntax->list i))
                                 (parse-expr v env*)))
                    [`([(,args ...) ,exp] ...)
                     `(letrec-values ([(,args ...) ,exp] ...)
-                       ,(for/list ([b (syntax->list #'(body* ...))])
+                       ,(for/list ([b (in-list (syntax->list #'(body* ...)))])
                           (parse-expr b env*)) ...
                        ,(parse-expr #'body env*))])]
                 [(set! id:id body)
@@ -469,7 +469,7 @@
                     ,(parse-expr #'result env))]
                 [(#%plain-app func body ...)
                  `(#%plain-app ,(parse-expr #'func env)
-                               ,(for/list ([i (syntax->list #'(body ...))])
+                               ,(for/list ([i (in-list (syntax->list #'(body ...)))])
                                   (parse-expr i env)) ...)]
                 [(#%top . id:id)
                  `(#%top . ,(parse-expr #'id env))]
@@ -485,14 +485,14 @@
                   [(ids:id ...)
                    (define env* (extend-env env (syntax->list #'(ids ...))))
                    (values
-                    `(,(for/list ([i (syntax->list #'(ids ...))])
+                    `(,(for/list ([i (in-list (syntax->list #'(ids ...)))])
                          (parse-expr i env*)) ...)
                     env*)]
                   [(id:id ids:id ... . rest:id)
                    (define env* (extend-env env (list* #'id #'rest (syntax->list #'(ids ...)))))
                    (values
                     `(,(parse-expr #'id env*)
-                      ,(for/list ([i (syntax->list #'(ids ...))])
+                      ,(for/list ([i (in-list (syntax->list #'(ids ...)))])
                          (parse-expr i env*)) ...
                       . ,(parse-expr #'rest env*))
                     env*)]
