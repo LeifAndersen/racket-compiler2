@@ -465,8 +465,8 @@
                 [(quote datum)
                  `(quote ,(syntax->datum #'datum))]
                 [(with-continuation-mark key val result)
-                 `(with-continuation-mark ,(parse-expr #'key) ,(parse-expr #'val)
-                    ,(parse-expr #'result))]
+                 `(with-continuation-mark ,(parse-expr #'key env) ,(parse-expr #'val env)
+                    ,(parse-expr #'result env))]
                 [(#%plain-app func body ...)
                  `(#%plain-app ,(parse-expr #'func env)
                                ,(for/list ([i (syntax->list #'(body ...))])
@@ -572,7 +572,15 @@
      (compile/2 #'(case-lambda [(x) (+ x 1)]
                                [(x y) x (+ x y)]))
      `(case-lambda (#%plain-lambda (x.1) (#%plain-app + x.1 '1))
-                   (#%plain-lambda (x.2 y.3) (begin x.2 (#%plain-app + x.2 y.3)))))))
+                   (#%plain-lambda (x.2 y.3) (begin x.2 (#%plain-app + x.2 y.3)))))
+    (check-equal?
+     (compile/2 #'(letrec ([f 5])
+                    (display "Hello")
+                    f))
+     `(letrec-values ([(f.1) '5])
+        (begin
+          (#%plain-app display '"Hello")
+          f.1)))))
 
 (define-pass identify-assigned-variables : L1 (e) -> L2 ()
   (definitions
@@ -1386,10 +1394,6 @@
         [(closure ,id ,lambda) (zo:closure (Lambda lambda) id)]
         [(primitive ,eni)
          (zo:primval eni)]
-        [(#%variable-reference-top (,eni))
-         (void)]
-        [(#%variable-reference ,eni)
-         (void)]
         [(#%top . ,eni) (void)]
         [(#%unbox ,eni)
          (zo:localref #t eni #f #f #f)]
@@ -1434,8 +1438,12 @@
          (zo:with-cont-mark (Expr expr1) (Expr expr2) (Expr expr3))]
         [(#%plain-app ,expr ,expr* ...)
          (zo:application (Expr expr) (map Expr expr*))]
+        [(#%variable-reference-top (,eni))
+         (zo:varref (zo:toplevel 0 0 #f #f) (zo:toplevel 0 0 #f #f))]
+        [(#%variable-reference ,eni)
+         (zo:varref (zo:toplevel 0 0 #f #f) (zo:toplevel 0 0 #f #f))]
         [(#%variable-reference)
-         (void)])
+         (zo:varref (zo:toplevel 0 0 #f #f) (zo:toplevel 0 0 #f #f))])
   (Lambda : lambda (e) -> * ()
           [(#%plain-lambda ,eni ,boolean (,binding2 ...) (,binding3 ...) ,eni4 ,expr)
            (zo:lam (gensym)
@@ -1449,7 +1457,7 @@
                    #f
                    eni4
                    (Expr expr))]))
-
+ 
 (module+ test
   (set! all-compiler-tests
         (cons
@@ -1471,7 +1479,18 @@
                                                (if (x . <= . 0)
                                                    1
                                                    (* x (fact (- x 1)))))])
-                                (fact 5))))
+                                (fact 5)))
+           (compile-compare #'(with-continuation-mark 'hello 'world
+                                (continuation-mark-set->list
+                                 (current-continuation-marks) 'hello)))
+           (compile-compare #'(if (= 4 4)
+                                  (begin
+                                    (random 1)
+                                    4)
+                                  3))
+           (compile-compare #'(eval '(+ 1 2)
+                                    (variable-reference->namespace
+                                     (#%variable-reference)))))
          all-compiler-tests)))
 
 (define-syntax (define-compiler stx)
