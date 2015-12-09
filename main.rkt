@@ -8,6 +8,7 @@
          racket/port
          racket/list
          compiler/zo-marshal
+         syntax/toplevel
          rackunit
          (prefix-in zo: compiler/zo-structs)
          (rename-in racket/base
@@ -33,6 +34,17 @@
 
 (define (datum? d)
   #t)
+
+(define primitive-module
+  (car (identifier-binding #'+)))
+
+(define (primitive-identifier? identifier)
+  (define binding (identifier-binding identifier))
+  (and (list? binding) (eq? (car binding) primitive-module)))
+
+(define (primitive->symbol identifier)
+  (define binding (identifier-binding identifier))
+  (cadr binding))
 
 (define id? symbol?)
 
@@ -130,6 +142,7 @@
                           (#%require raw-require-spec ...))
   (expr (expr)
         id
+        (primitive id)
         (#%plain-lambda formals expr* ... expr)
         (case-lambda (formals expr* ... expr) ...)
         (if expr1 expr2 expr3)
@@ -254,6 +267,7 @@
       (boolean (boolean))))
   (expr (expr)
         (- id
+           (primitive id)
            (let-void (id ...) expr)
            (let ([id expr1]) expr)
            (letrec ([id lambda] ...)
@@ -404,7 +418,9 @@
                 #:literals (#%plain-lambda case-lambda if begin begin0 let-values letrec-values set!
                                            quote quote-syntax with-continuation-mark #%plain-app
                                            #%top #%variable-reference)
-                [id:id ((lookup-env env) #'id)]
+                [id:id (if (primitive-identifier? #'id)
+                           `(primitive ,(primitive->symbol #'id))
+                           ((lookup-env env) #'id))]
                 [(#%plain-lambda formals body* ... body)
                  (define-values (formals* env*) (parse-formals #'formals env))
                  `(#%plain-lambda ,formals*
@@ -523,15 +539,15 @@
                         (+ 5 6))))))
      `(module outer racket
         ((submodule* post racket
-                     ((#%plain-app + '1 '2)))
-         (#%plain-app + '3 '4)
+                     ((#%plain-app (primitive +) '1 '2)))
+         (#%plain-app (primitive +) '3 '4)
          (submodule pre racket
-                    ((#%plain-app + '5 '6))))))
+                    ((#%plain-app (primitive +) '5 '6))))))
     (check-equal?
      (compile/1 #'(lambda (a b . c)
                     (apply + a b c)))
      `(#%expression (#%plain-lambda (a.1 b.3 . c.2)
-                                    (#%plain-app apply + a.1 b.3 c.2))))))
+                                    (#%plain-app (primitive apply) (primitive +) a.1 b.3 c.2))))))
 
 (define-pass make-begin-explicit : Lsrc (e) -> L1 ()
   (Expr : expr (e) -> expr ()
@@ -569,21 +585,21 @@
     (check-equal?
      (compile/2 #'(case-lambda [(x) (+ x 1) (begin0 x (set! x 42))]))
      `(#%plain-lambda (x.1)
-                      (begin (#%plain-app + x.1 '1)
+                      (begin (#%plain-app (primitive +) x.1 '1)
                              (begin0 x.1
                                (set! x.1 '42)))))
     (check-equal?
      (compile/2 #'(case-lambda [(x) (+ x 1)]
                                [(x y) x (+ x y)]))
-     `(case-lambda (#%plain-lambda (x.1) (#%plain-app + x.1 '1))
-                   (#%plain-lambda (x.2 y.3) (begin x.2 (#%plain-app + x.2 y.3)))))
+     `(case-lambda (#%plain-lambda (x.1) (#%plain-app (primitive +) x.1 '1))
+                   (#%plain-lambda (x.2 y.3) (begin x.2 (#%plain-app (primitive +) x.2 y.3)))))
     (check-equal?
      (compile/2 #'(letrec ([f 5])
                     (display "Hello")
                     f))
      `(letrec-values ([(f.1) '5])
         (begin
-          (#%plain-app display '"Hello")
+          (#%plain-app (primitive display) '"Hello")
           f.1)))))
 
 (define-pass identify-assigned-variables : L1 (e) -> L2 ()
@@ -667,7 +683,7 @@
      `(let-values ([(x.1) '8])
         (assigned (x.1)
                   (begin (set! x.1 '5)
-                         (#%plain-app + x.1 '42)))))
+                         (#%plain-app (primitive +) x.1 '42)))))
     (check-equal?
      (compile/3 #'(let ([x 1])
                     (letrec ([y (lambda (x) y)])
@@ -676,7 +692,7 @@
         (assigned ()
           (letrec-values ([(y.2) (#%plain-lambda (x.3) (assigned () y.2))])
             (assigned ()
-                      (#%plain-app + x.1 y.2))))))
+                      (#%plain-app (primitive +) x.1 y.2))))))
     (check-equal?
      (compile/3 #'(lambda x
                     (set! x 42)
@@ -754,15 +770,15 @@
             [c.3 (undefined)])
         (begin-set!
           (set!-values (a.1) '5)
-          (set!-values (b.2 c.3) (#%plain-app values '6 '7))
+          (set!-values (b.2 c.3) (#%plain-app (primitive values) '6 '7))
           (assigned (c.3 b.2 a.1)
-                    (#%plain-app + a.1 b.2 c.3)))))
+                    (#%plain-app (primitive +) a.1 b.2 c.3)))))
     (check-equal?
      (compile/5 #'(let ([x (if #t 5 6)])
                     (set! x (+ x 1))))
      `(let ([x.1 (if '#t '5 '6)])
         (begin-set!
-          (assigned (x.1) (set!-values (x.1) (#%plain-app + x.1 '1))))))
+          (assigned (x.1) (set!-values (x.1) (#%plain-app (primitive +) x.1 '1))))))
     (check-equal?
      (compile/5 #'(let-values ([(x y) (values 1 2)]
                                [(z) 3])
@@ -772,12 +788,12 @@
             [y.2 (undefined)]
             [z.3 (undefined)])
         (begin-set!
-          (set!-values (x.1 y.2) (#%plain-app values '1 '2))
+          (set!-values (x.1 y.2) (#%plain-app (primitive values) '1 '2))
           (set!-values (z.3) '3)
           (assigned (x.1)
                     (begin
                       (set!-values (x.1) '5)
-                      (#%plain-app + y.2 z.3))))))
+                      (#%plain-app (primitive +) y.2 z.3))))))
     (check-equal?
      (compile/5 #'(let-values ([(x y) (values 1 2)])
                     (set! x y)
@@ -785,7 +801,7 @@
      `(let ([x.1 (undefined)]
             [y.2 (undefined)])
         (begin-set!
-          (set!-values (x.1 y.2) (#%plain-app values '1 '2))
+          (set!-values (x.1 y.2) (#%plain-app (primitive values) '1 '2))
           (assigned (x.1)
                     (begin
                       (set!-values (x.1) y.2)
@@ -867,7 +883,7 @@
                                       (set!-values (x.1) (#%box x.1))
                                       (begin
                                         (set!-boxes (x.1) '5)
-                                        (#%plain-app list (#%unbox x.1) y.2))))))
+                                        (#%plain-app (primitive list) (#%unbox x.1) y.2))))))
     (check-equal?
      (compile/6 #'(lambda x
                     (let ()
@@ -878,7 +894,7 @@
                                       (set!-values (x.1) (#%box x.1))
                                       (begin
                                         (set!-boxes (x.1) '42)
-                                        (#%plain-app + (#%unbox x.1) '8))))))
+                                        (#%plain-app (primitive +) (#%unbox x.1) '8))))))
     (check-equal?
      (compile/6 #'(let-values ([(x y) (values 1 2)])
                     (set! x y)
@@ -886,7 +902,7 @@
      `(let ([x.1 (undefined)]
             [y.2 (undefined)])
         (begin
-          (set!-values (x.1 y.2) (#%plain-app values '1 '2))
+          (set!-values (x.1 y.2) (#%plain-app (primitive values) '1 '2))
           (begin
             (set!-values (x.1) (#%box x.1))
             (begin
@@ -1049,7 +1065,7 @@
                      (#%expression
                       (#%plain-lambda y.1
                                       (free () (x)
-                                            (if (#%top . x) '4 '5)))))))
+                                            (if x '4 '5)))))))
     (check-equal?
      (compile/7 #'(begin
                     (define x 5)
@@ -1134,38 +1150,38 @@
      (compile/9 #'(let ([x 1]
                         [y 2])
                     (+ x y)))
-     `(program (+) (let-void (x.1 y.2)
+     `(program () (let-void (x.1 y.2)
                             (begin
                               (set!-values (x.1) '1)
                               (set!-values (y.2) '2)
-                              (#%plain-app + x.1 y.2)))))
+                              (#%plain-app (primitive +) x.1 y.2)))))
     (check-equal?
      (compile/9 #'(let-values ([(x y) (values 1 2)]
                                [(z) 3])
                     (set! x 5)
                     (+ x y z)))
-     `(program (values +) (let-void (x.1 y.2 z.3)
+     `(program () (let-void (x.1 y.2 z.3)
                             (begin
-                              (set!-values (x.1 y.2) (#%plain-app values '1 '2))
+                              (set!-values (x.1 y.2) (#%plain-app (primitive values) '1 '2))
                               (set!-values (z.3) '3)
                               (begin
                                 (set!-values (x.1) (#%box x.1))
                                 (begin
                                   (set!-boxes (x.1) '5)
-                                  (#%plain-app + (#%unbox x.1) y.2 z.3)))))))
+                                  (#%plain-app (primitive +) (#%unbox x.1) y.2 z.3)))))))
      (check-equal?
      (compile/9 #'(let ([x 5])
                     (lambda (y)
                       (set! x 6)
                       (+ x y))))
-     `(program (+) (let ([x.1 '5])
+     `(program () (let ([x.1 '5])
                     (begin
                       (set!-values (x.1) (#%box x.1))
                       (#%plain-lambda (y.2)
-                                      (free (x.1) (+)
+                                      (free (x.1) ()
                                             (begin
                                               (set!-boxes (x.1) '6)
-                                              (#%plain-app + (#%unbox x.1) y.2))))))))))
+                                              (#%plain-app (primitive +) (#%unbox x.1) y.2))))))))))
 
 (define-pass debruijn-indices : L7 (e) -> L8 ()
   (definitions
@@ -1182,8 +1198,7 @@
     (define ((var->index env frame) id)
       (if (dict-has-key? env id)
           (- frame (lookup-env env id))
-          (with-output-language (L8 binding)
-            `(primitive ,(dict-ref primitive-table* id)))))
+          (error "Not implemented yet")))
     ;; Convert a list of identifiers to it's range and offset
     ;; (valid because list ids should be consecutive
     ;; (list symbol) -> (values exact-nonnegative-integer exact-nonnegative-integer)
@@ -1204,6 +1219,7 @@
                             ,(Expr expr env* frame*))])
   (Expr : expr (e [env '()] [frame 0]) -> expr ()
         [,id ((var->index env frame) id)]
+        [(primitive ,id) `(primitive ,(dict-ref primitive-table* id))]
         [(#%box ,id) `(#%box ,((var->index env frame) id))]
         [(#%unbox ,id) `(#%unbox ,((var->index env frame) id))]
         [(set!-values (,id ...) ,[expr])
@@ -1246,11 +1262,11 @@
      (compile/10 #'(let ([x 5]
                         [y 6])
                     (+ x y)))
-     `(program (+) (let-void 2
-                             (begin
-                               (set!-values 1 0 '5)
-                               (set!-values 1 1 '6)
-                               (#%plain-app (primitive 247) 2 3)))))))
+     `(program () (let-void 2
+                            (begin
+                              (set!-values 1 0 '5)
+                              (set!-values 1 1 '6)
+                              (#%plain-app (primitive 247) 2 3)))))))
 
 (define-pass find-let-depth : L8 (e) -> L9 ()
   (Lambda : lambda (e) -> lambda (0)
@@ -1333,8 +1349,8 @@
   (define-compiler-test L9 compilation-top
     (check-equal?
      (compile/11 #'(lambda (x) (let ([y 5]) (+ x y))))
-     `(program 1 (+) (#%expression
-                     (#%plain-lambda 1 #f () ((primitive 247)) 11 (let-one '5 (#%plain-app (primitive 247) 3 2))))))
+     `(program 1 () (#%expression
+                     (#%plain-lambda 1 #f () () 10 (let-one '5 (#%plain-app (primitive 247) 3 2))))))
     (check-equal?
      (compile/11 #'(if (= 5 6)
                        (let ([x '5]
@@ -1342,7 +1358,7 @@
                          y)
                        (let ([x '6])
                          x)))
-     `(program 2 (=) (if (#%plain-app (primitive 256) '5 '6)
+     `(program 2 () (if (#%plain-app (primitive 256) '5 '6)
                         (let-void 2
                                   (begin
                                     (set!-values 1 0 '5)
@@ -1462,7 +1478,7 @@
                    #f
                    eni4
                    (Expr expr))]))
- 
+
 (module+ test
   (set! all-compiler-tests
         (cons
@@ -1524,7 +1540,9 @@
 
 (define (expand-syntax* stx)
   (parameterize ([current-namespace (make-base-namespace)])
-    (expand-syntax stx)))
+    (namespace-require 'racket/undefined)
+    (expand-syntax-top-level-with-compile-time-evals
+     (namespace-syntax-introduce stx))))
 
 (define-compiler compile
   expand-syntax*
