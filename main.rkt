@@ -7,6 +7,7 @@
          racket/dict
          racket/port
          racket/list
+         racket/function
          compiler/zo-marshal
          syntax/toplevel
          rackunit
@@ -54,6 +55,8 @@
   (require rackunit
            rackunit/text-ui)
 
+  (provide (all-defined-out))
+
   ; Counter for a version of fresh that is deterministic (for tests)
   (define deterministic-fresh/count 0)
   (define (deterministic-fresh symb)
@@ -99,13 +102,12 @@
            #,(syntax/loc stx
                (check-equal?
                 (eval (bytes->compiled-expression (compile expression)))
-                (eval expression))))])))
+                (eval expression))))]))
 
-; TODO Move back into test submodule.
-(define (bytes->compiled-expression zo)
-  (parameterize ([read-accept-compiled #t])
-    (with-input-from-bytes zo
-      (lambda () (read)))))
+  (define (bytes->compiled-expression zo)
+    (parameterize ([read-accept-compiled #t])
+      (with-input-from-bytes zo
+        (lambda () (read))))))
 
 (define-language Lsrc
   (terminals
@@ -241,6 +243,24 @@
   (entry compilation-top)
   (compilation-top (compilation-top)
                    (+ (program (id ...) top-level-form)))
+  (top-level-form (top-level-form)
+   (- (module id module-path
+        (module-level-form ...)))
+   (+ (module id module-path (id* ...)
+              (module-level-form ...))))
+  (submodule-form (submodule-form)
+                  (- (submodule id module-path
+                                (module-level-form ...))
+                     (submodule* id module-path
+                                 (module-level-form ...))
+                     (submodule* id
+                                 (module-level-form ...)))
+                  (+ (submodule id module-path (id* ...)
+                                (module-level-form ...))
+                     (submodule* id module-path (id* ...)
+                                 (module-level-form ...))
+                     (submodule* id (id* ...)
+                                 (module-level-form ...))))
   (lambda (lambda)
     (- (#%plain-lambda formals expr))
     (+ (#%plain-lambda formals fbody)))
@@ -292,6 +312,9 @@
            (#%top . eni)
            (#%variable-reference eni)
            (#%variable-reference-top (eni))))
+  (general-top-level-form (general-top-level-form)
+                          (- (define-values (id ...) expr))
+                          (+ (define-values (eni ...) expr)))
   (lambda (lambda)
     (- (#%plain-lambda formals fbody))
     (+ (#%plain-lambda eni1 boolean (binding2 ...) (binding3 ...) expr)))
@@ -926,11 +949,11 @@
                        [(define-values (,id ...) ,[expr free-local free-global])
                         (values `(define-values (,id ...) ,expr)
                                 free-local
-                                (set-subtract free-global id))]
+                                (set-union free-global id))]
                        [(define-syntaxes (,id ...) ,[expr free-local free-global])
                         (values `(define-syntaxes (,id ...) ,expr)
                                 free-local
-                                (set-subtract free-global id))])
+                                (set-union free-global id))])
   (Expr : expr (e [env '()]) -> expr ('() '())
         [,id (if (set-member? env id)
                  (values id (list id) '())
@@ -1019,6 +1042,11 @@
                  (apply set-union free-local free-local*)
                  (apply set-union free-global free-global*))])
   (TopLevelForm : top-level-form (e [env '()]) -> top-level-form ('() '())
+                [(module ,id ,module-path
+                   (,[module-level-form free-local free-global] ...))
+                 (values `(module ,id ,module-path (,(apply set-union '() free-global) ...)
+                                  (,module-level-form ...))
+                         '() '())]
                 [(begin* ,[top-level-form free-local free-global] ...)
                  (values `(begin* ,top-level-form ...)
                          (apply set-union '() free-local)
@@ -1032,7 +1060,22 @@
   (ModuleLevelForm : module-level-form (e [env '()]) -> module-level-form ('() '())
                    [(begin-for-syntax ,[module-level-form free-local free-global])
                     (values `(begin-for-syntax module-level-form) free-local free-global)])
-  (SubmoduleForm : submodule-form (e env) -> submodule-form ('() '()))
+  (SubmoduleForm : submodule-form (e env) -> submodule-form ('() '())
+                 [(submodule ,id ,module-path
+                             (,[module-level-form free-local free-global] ...))
+                  (values `(submodule ,id ,module-level-form (,(apply set-union '() free-global) ...)
+                                      (,module-level-form ...))
+                          '() '())]
+                 [(submodule* ,id ,module-path
+                              (,[module-level-form free-local free-global] ...))
+                  (values `(submodule* ,id ,module-level-form (,(apply set-union '() free-global) ...)
+                                       (,module-level-form ...))
+                          '() '())]
+                 [(submodule* ,id
+                              (,[module-level-form free-local free-global] ...))
+                  (values `(submodule* ,id (,(apply set-union '() free-global) ...)
+                                       (,module-level-form ...))
+                          '() '())])
   (let-values ([(e* local* global*) (TopLevelForm e '())])
     `(program (,global* ...) ,e*)))
 
@@ -1077,7 +1120,21 @@
      (compile/7 #'(letrec ([f (lambda (x) x)])
                     (f 12)))
      `(program () (letrec ([f.1 (#%plain-lambda (x.2) (free () () x.2))])
-                    (#%plain-app f.1 '12))))))
+                    (#%plain-app f.1 '12))))
+    (check-equal?
+     (compile/7 #'(begin
+                    (define x 5)
+                    (define y 6)
+                    (module foo racket/base
+                      (#%plain-module-begin
+                       (define x 12)
+                       (define z 13)))))
+     `(program (y x) (begin*
+                       (define-values (x) '5)
+                       (define-values (y) '6)
+                       (module foo racket/base (z x)
+                         ((define-values (x) '12)
+                          (define-values (z) '13))))))))
 
 (define-pass closurify-letrec : L5 (e) -> L6 ()
   (definitions
@@ -1195,17 +1252,22 @@
         (values (dict-set env i (+ ref 1)) (+ ref 1))))
     (define (lookup-env env id)
       (dict-ref env id))
-    (define ((var->index env frame) id)
+    (define (make-global-env ids)
+      (for/fold ([env (hash)])
+                ([i ids] [index (in-range (length ids))])
+        (hash-set env i index)))
+    (define ((var->index env frame global-env) id)
       (if (dict-has-key? env id)
           (- frame (lookup-env env id))
-          (error "Not implemented yet")))
+          (with-output-language (L8 expr)
+          `(#%top . ,(dict-ref global-env id)))))
     ;; Convert a list of identifiers to it's range and offset
     ;; (valid because list ids should be consecutive
     ;; (list symbol) -> (values exact-nonnegative-integer exact-nonnegative-integer)
     (define (ids->range env frame ids)
-      (define indices (map (var->index env frame) ids))
+      (define indices (map (var->index env frame '()) ids)) ;; TODO '() should be global env
       (values (length indices) (car indices))))
-  (Lambda : lambda (e [env '()] [frame 0]) -> lambda ()
+  (Lambda : lambda (e [env '()] [frame 0] [global-env '()]) -> lambda ()
           [(#%plain-lambda ,formals
                            (free (,id2 ...) (,id3 ...)
                                  ,expr))
@@ -1214,14 +1276,14 @@
            (define-values (env* frame*) (extend-env env frame (reverse (append id2 params))))
            `(#%plain-lambda ,(length params)
                             ,rest?
-                            (,(map (var->index env frame) id2) ...)
-                            (,(map (var->index env frame) id3) ...)
-                            ,(Expr expr env* frame*))])
-  (Expr : expr (e [env '()] [frame 0]) -> expr ()
-        [,id ((var->index env frame) id)]
+                            (,(map (var->index env frame global-env) id2) ...)
+                            (,(map (var->index env frame global-env) id3) ...)
+                            ,(Expr expr env* frame* global-env))])
+  (Expr : expr (e [env '()] [frame 0] [global-env '()]) -> expr ()
+        [,id ((var->index env frame global-env) id)]
         [(primitive ,id) `(primitive ,(dict-ref primitive-table* id))]
-        [(#%box ,id) `(#%box ,((var->index env frame) id))]
-        [(#%unbox ,id) `(#%unbox ,((var->index env frame) id))]
+        [(#%box ,id) `(#%box ,((var->index env frame global-env) id))]
+        [(#%unbox ,id) `(#%unbox ,((var->index env frame global-env) id))]
         [(set!-values (,id ...) ,[expr])
          (define-values (count offset) (ids->range env frame id))
          `(set!-values ,count ,offset ,expr)]
@@ -1234,20 +1296,54 @@
         [(let ([,id ,[expr1]])
            ,expr)
          (define-values (env* frame*) (extend-env env frame (list id)))
-         `(let-one ,expr1 ,(Expr expr env* frame*))]
+         `(let-one ,expr1 ,(Expr expr env* frame* global-env))]
         [(let-void (,id ...)
                    ,expr)
          (define-values (env* frame*) (extend-env env frame (reverse id)))
          `(let-void ,(length id)
-                    ,(Expr expr env* frame*))]
+                    ,(Expr expr env* frame* global-env))]
         [(letrec ([,id ,[lambda]] ...)
            ,[expr])
          `(letrec (,lambda ...)
             ,expr)]
         [(#%plain-app ,expr ,expr* ...)
-         (define expr1 (Expr expr env (+ frame (length expr*))))
-         (define expr*1 (map (lambda (e) (Expr e env (+ frame (length expr*)))) expr*))
-         `(#%plain-app ,expr1 ,expr*1 ...)]))
+         (define expr1 (Expr expr env (+ frame (length expr*)) global-env))
+         (define expr*1 (map (lambda (e) (Expr e env (+ frame (length expr*)) global-env)) expr*))
+         `(#%plain-app ,expr1 ,expr*1 ...)])
+  (GeneralTopLevelForm : general-top-level-form (e [env '()] [frame 0] [global-env '()])
+                       -> general-top-level-form ()
+                       [(define-values (,id ...) ,[expr])
+                        `(define-values (,(map ((curry dict-ref) global-env) id) ...) ,expr)])
+  (TopLevelForm : top-level-form (e [env '()] [frame 0] [global-env '()]) -> top-level-form ()
+                [(module ,id ,module-path (,id* ...)
+                         (,module-level-form ...))
+                 (define global-env* (make-global-env id*))
+                 `(module ,id ,module-path (,id* ...)
+                          (,(for/list ([mlf (in-list module-level-form)])
+                              (ModuleLevelForm mlf env frame global-env)) ...))])
+  (SubmoduleForm : submodule-form (e [env '()] [frame 0] [global-env '()]) -> submodule-form ()
+                 [(submodule ,id ,module-path (,id* ...)
+                             (,module-level-form ...))
+                  (define global-env* (make-global-env id*))
+                  `(submodule ,id ,module-path (,id* ...)
+                              (,(for/list ([mlf (in-list module-level-form)])
+                                  (ModuleLevelForm mlf env frame global-env)) ...))]
+                 [(submodule* ,id ,module-path (,id* ...)
+                              (,module-level-form ...))
+                  (define global-env* (make-global-env id*))
+                  `(submodule* ,id ,module-path (,id* ...)
+                               (,(for/list ([mlf (in-list module-level-form)])
+                                   (ModuleLevelForm mlf env frame global-env)) ...))]
+                 [(submodule* ,id (,id* ...)
+                              (,module-level-form ...))
+                  (define global-env* (make-global-env id*))
+                  `(submodule* ,id (,id* ...)
+                               (,(for/list ([mlf (in-list module-level-form)])
+                                   (ModuleLevelForm mlf env frame global-env)) ...))])
+  (ModuleLevelForm : module-level-form (e [env '()] [frame 0] [global-env '()]) -> module-level-form ())
+  (CompilationTop : compilation-top (e) -> compilation-top ()
+                  [(program (,id ...) ,top-level-form)
+                   `(program (,id ...) ,(TopLevelForm top-level-form '() 0 (make-global-env id)))]))
 
 (module+ test
   (define-compiler-test L8 compilation-top
@@ -1266,7 +1362,14 @@
                             (begin
                               (set!-values 1 0 '5)
                               (set!-values 1 1 '6)
-                              (#%plain-app (primitive 247) 2 3)))))))
+                              (#%plain-app (primitive 247) 2 3)))))
+    (check-equal?
+     (compile/10 #'(begin
+                     (define x 5)
+                     (+ x 5)))
+     `(program (x) (begin*
+                     (define-values (0) '5)
+                     (#%plain-app (primitive 247) (#%top . 0) '5))))))
 
 (define-pass find-let-depth : L8 (e) -> L9 ()
   (Lambda : lambda (e) -> lambda (0)
@@ -1313,8 +1416,10 @@
   (TopLevelForm : top-level-form (e) -> top-level-form (0)
                 [(#%expression ,[expr depth])
                  (values `(#%expression ,expr) depth)]
-                [(module ,id ,module-path (,[module-level-form depth] ...))
-                 (values `(module ,id ,module-path (,module-level-form ...))
+                [(module ,id ,module-path (,id* ...)
+                         (,[module-level-form depth] ...))
+                 (values `(module ,id ,module-path (,id* ...)
+                                  (,module-level-form ...))
                          (apply max 0 depth))]
                 [(begin* ,[top-level-form depth] ...)
                  (values `(begin* ,top-level-form ...)
@@ -1327,18 +1432,24 @@
                     (values `(begin-for-syntax ,module-level-form ...)
                             (apply max 0 depth))])
   [SubmoduleForm : submodule-form (e) -> module-level-form (0)
-                 [(submodule ,id ,module-path (,[module-level-form depth] ...))
-                  (values `(submodule ,id ,module-path (,module-level-form ...))
+                 [(submodule ,id ,module-path (,id* ...)
+                             (,[module-level-form depth] ...))
+                  (values `(submodule ,id ,module-path (,id* ...)
+                                      (,module-level-form ...))
                           (apply max 0 depth))]
-                 [(submodule* ,id ,module-path (,[module-level-form depth] ...))
-                  (values `(submodule* ,id ,module-path (,module-level-form ...))
+                 [(submodule* ,id ,module-path (,id* ...)
+                              (,[module-level-form depth] ...))
+                  (values `(submodule* ,id ,module-path (,id* ...)
+                                       (,module-level-form ...))
                           (apply max 0 depth))]
-                 [(submodule* ,id (,[module-level-form depth] ...))
-                  (values `(submodule* ,id (,module-level-form ...))
+                 [(submodule* ,id (,id* ...)
+                              (,[module-level-form depth] ...))
+                  (values `(submodule* ,id (,id* ...)
+                                       (,module-level-form ...))
                           (apply max 0 depth))]]
   (GeneralTopLevelForm : general-top-level-form (e) -> general-top-level-form (0)
-                       [(define-values (,id ...) ,[expr depth])
-                        (values `(define-values (,id ...) ,expr) depth)]
+                       [(define-values (,eni ...) ,[expr depth])
+                        (values `(define-values (,eni ...) ,expr) depth)]
                        [(define-syntaxes (,id ...) ,[expr depth])
                         (values `(define-syntaxes (,id ...) ,expr) depth)])
   (CompilationTop : compilation-top (e) -> compilation-top ()
@@ -1375,11 +1486,15 @@
       (zo:primval 35)))
   (CompilationTop : compilation-top (e) -> * ()
                   [(program ,eni (,id ...) ,top-level-form)
-                   (zo:compilation-top eni (hash) tmp-prefix (TopLevelForm top-level-form))])
+                   (zo:compilation-top eni
+                                       (hash)
+                                       (zo:prefix 0 id '() 'missing)
+                                       (TopLevelForm top-level-form))])
   (TopLevelForm : top-level-form (e) -> * ()
                 [(#%expression ,expr)
                  (Expr expr)]
-                [(module ,id ,module-path (,module-level-form ...))
+                [(module ,id ,module-path (,id* ...)
+                         (,module-level-form ...))
                  (void)]
                 [(begin* ,top-level-form ...)
                  (zo:splice (map TopLevelForm top-level-form))]
@@ -1393,15 +1508,19 @@
                    [(#%declare ,declaration-keyword ...)
                     (void)])
   (SubmoduleForm : submodule-form (e) -> * ()
-                 [(submodule ,id ,module-path (,module-level-form ...))
+                 [(submodule ,id ,module-path (,id* ...)
+                             (,module-level-form ...))
                   (void)]
-                 [(submodule* ,id ,module-path (,module-level-form ...))
+                 [(submodule* ,id ,module-path (,id* ...)
+                              (,module-level-form ...))
                   (void)]
-                 [(submodule* ,id (,module-level-form ...))
+                 [(submodule* ,id (,id* ...) (,module-level-form ...))
                   (void)])
   (GeneralTopLevelForm : general-top-level-form (e) -> * ()
-                       [(define-values (,id ...) ,expr)
-                        (void)]
+                       [(define-values (,eni ...) ,expr)
+                        (zo:def-values (for/list ([i (in-list eni)])
+                                         (zo:toplevel 0 i #f #f))
+                                       (Expr expr))]
                        [(define-syntaxes (,id ...) ,expr)
                         (void)]
                        [(#%require ,raw-require-spec ...)
@@ -1415,7 +1534,7 @@
         [(closure ,id ,lambda) (zo:closure (Lambda lambda) id)]
         [(primitive ,eni)
          (zo:primval eni)]
-        [(#%top . ,eni) (void)]
+        [(#%top . ,eni) (zo:toplevel 0 eni #f #f)]
         [(#%unbox ,eni)
          (zo:localref #t eni #f #f #f)]
         [(#%box ,eni)
@@ -1509,6 +1628,8 @@
                                     (random 1)
                                     4)
                                   3))
+           (compile-compare #'(let ([+ 12])
+                                (- + 8)))
            (compile-compare #'(begin
                                 (define x 5)
                                 x))
@@ -1522,7 +1643,7 @@
     [(_ name:id passes* ...+)
      (define passes (reverse (syntax->list #'(passes* ...))))
      #`(begin (define name (compose #,@passes))
-              (begin ;(module+ test
+              (module+ test
                 #,@(let build-partial-compiler ([passes passes]
                                                 [pass-count (length passes)])
                      (if (= pass-count 0)
