@@ -307,6 +307,7 @@
              expr)
            (set!-boxes eni1 eni2 expr)
            (set!-values eni1 eni2 expr)
+           (set!-global eni1 expr)
            (#%box eni)
            (#%unbox eni)
            (#%top . eni)
@@ -1552,9 +1553,8 @@
          (zo:install-value eni1 eni2 #f (Expr expr) zo-void)]
         [(set!-boxes ,eni1 ,eni2 ,expr)
          (zo:install-value eni1 eni2 #t (Expr expr) zo-void)]
-        ;[(letrec (,lambda) ,expr)
-        ; (zo:closure (Lambda lambda)
-        ;             (gensym))]
+        [(set!-global ,eni ,expr)
+         (zo:assign eni (Expr expr) #f)]
         [(letrec (,lambda ...) ,expr)
          (zo:let-rec (map Lambda lambda) (Expr expr))]
         [(let-one ,expr1 ,expr)
@@ -1633,9 +1633,16 @@
            (compile-compare #'(begin
                                 (define x 5)
                                 x))
+           (compile-compare #'(begin
+                                (define x 5)
+                                (let ([y 6])
+                                  (set! x (+ x 1))
+                                  (set! y (+ y 1))
+                                  (+ x y))))
            (compile-compare #'(eval '(+ 1 2)
                                     (variable-reference->namespace
-                                     (#%variable-reference)))))
+                                     (#%variable-reference))))
+           (compile-compare #'(call/cc (lambda (x) 5))))
          all-compiler-tests)))
 
 (define-syntax (define-compiler stx)
