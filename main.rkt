@@ -1368,9 +1368,10 @@
            (define rest? (formals-rest?* formals))
            (define-values (env* frame*) (extend-env env frame (reverse (append id2 params))))
            (define frame** (if (= (length id3) 0) frame* (+ frame* 1)))
+           (define locals (map (var->index env frame global-env) id2))
            `(#%plain-lambda ,(length params)
                             ,rest?
-                            (,(map (var->index env frame global-env) id2) ...)
+                            (,(if (= (length id3) 0) locals (cons (- frame prefix-frame) locals)) ...)
                             (,(map ((curry dict-ref) global-env) id3) ...)
                             ,(Expr expr env* frame** global-env frame**))])
   (Expr : expr (e [env '()] [frame 0] [global-env '()] [prefix-frame 0]) -> expr ()
@@ -1389,10 +1390,11 @@
         [(#%top . ,id) `(#%top ,(- frame prefix-frame) ,(dict-ref global-env id))]
         [(#%variable-reference-top (,id)) `(#%variable-reference-top (0))] ;; TODO: Global vars
         [(#%variable-reference ,id) `(#%variable-reference ,((var->index env frame) id))]
-        [(let ([,id ,[expr1]])
+        [(let ([,id ,expr1])
            ,expr)
          (define-values (env* frame*) (extend-env env frame (list id)))
-         `(let-one ,expr1 ,(Expr expr env* frame* global-env prefix-frame))]
+         `(let-one ,(Expr expr1 env (+ frame 1) global-env prefix-frame)
+                   ,(Expr expr env* frame* global-env prefix-frame))]
         [(let-void (,id ...)
                    ,expr)
          (define-values (env* frame*) (extend-env env frame (reverse id)))
@@ -1477,7 +1479,7 @@
      `(program (x) (begin*
                      (define-values (0) '5)
                      (#%expression
-                      (#%plain-lambda 1 #f () (0)
+                      (#%plain-lambda 1 #f (0) (0)
                                       (begin 1 (#%top 0 0)))))))))
 
 (define-pass find-let-depth : L9 (e) -> L10 ()
@@ -1702,7 +1704,7 @@
                    boolean
                    (list->vector binding2)
                    (map (lambda (x) 'val/ref) binding2)
-                   #f
+                   (if (null? binding3) #f (list->set binding3))
                    eni4
                    (Expr expr))]))
 
@@ -1747,17 +1749,21 @@
                                 x))
            (compile-compare #'(begin
                                 (define x 5)
+                                (let ([b (lambda (y) (+ x y))])
+                                  (b 12))))
+           (compile-compare #'(begin
+                                (define x 5)
                                 ((lambda (y)
                                    ((lambda (z)
                                       (+ x y z)) 4)) 5)))
-          #;(compile-compare #'(begin
+           (compile-compare #'(begin
                                 (define x 5)
                                 (((let ([a (lambda (y)
                                              (let ([b (lambda (z)
                                                         (+ x y z))])
                                                b))])
                                     a) 3) 4)))
-           #;(compile-compare #'(begin
+           (compile-compare #'(begin
                                 (define x 5)
                                 (let ([y 6])
                                   (set! x (+ x 1))
