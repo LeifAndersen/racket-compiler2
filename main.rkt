@@ -1812,7 +1812,7 @@
            (compile-compare #'(eval '(+ 1 2)
                                     (variable-reference->namespace
                                      (#%variable-reference))))
-           #;(compile-compare #'(call/cc (lambda (x) 5))))
+           (compile-compare #'(call-with-current-continuation (lambda (x) 5))))
          all-compiler-tests)))
 
 (define-syntax (define-compiler stx)
