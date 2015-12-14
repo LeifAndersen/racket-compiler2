@@ -8,6 +8,7 @@
          racket/port
          racket/list
          racket/function
+         racket/bool
          compiler/zo-marshal
          syntax/toplevel
          rackunit
@@ -116,7 +117,8 @@
    (module-path (module-path))
    (declaration-keyword (declaration-keyword))
    (datum (datum))
-   (id (id)))
+   (id (id))
+   (false (false)))
   (top-level-form (top-level-form)
                   general-top-level-form
                   (#%expression expr)
@@ -161,7 +163,7 @@
         (#%plain-app expr expr* ...)
         (#%top . id)
         (#%variable-reference id)
-        (#%variable-reference-top (id))
+        (#%variable-reference-top id)
         (#%variable-reference))
   (formals (formals)
            id
@@ -242,7 +244,7 @@
   (extends L4)
   (entry compilation-top)
   (compilation-top (compilation-top)
-                   (+ (program (id ...) top-level-form)))
+                   (+ (program (binding ...) top-level-form)))
   (top-level-form (top-level-form)
    (- (module id module-path
         (module-level-form ...)))
@@ -264,8 +266,11 @@
   (lambda (lambda)
     (- (#%plain-lambda formals expr))
     (+ (#%plain-lambda formals fbody)))
+  (binding (binding)
+           (+ id
+              false))
   (free-body (fbody)
-             (+ (free (id ...) (id* ...) expr))))
+             (+ (free (id ...) (binding* ...) expr))))
 
 (define-language L6
   (extends L5)
@@ -303,8 +308,9 @@
            (#%box id)
            (#%unbox id)
            (#%top . id)
+           (#%variable-reference)
            (#%variable-reference id)
-           (#%variable-reference-top (id)))
+           (#%variable-reference-top id))
         (+ binding
            (primitive eni)
            (let-void eni expr)
@@ -317,8 +323,9 @@
            (#%box eni)
            (#%unbox eni)
            (#%top eni1 eni2)
+           (#%variable-reference-none eni1 eni2)
            (#%variable-reference eni)
-           (#%variable-reference-top (eni))))
+           (#%variable-reference-top eni)))
   (general-top-level-form (general-top-level-form)
                           (- (define-values (id ...) expr))
                           (+ (define-values (eni ...) expr)))
@@ -333,14 +340,14 @@
               (id ...)
               (id id* ... . id2)))
   (free-body (fbody)
-             (- (free (id ...) (id* ...) expr))))
+             (- (free (id ...) (binding* ...) expr))))
 
 (define-language L10
   (extends L9)
   (entry compilation-top)
   (compilation-top (compilation-top)
-                   (- (program (id ...) top-level-form))
-                   (+ (program eni (id ...) top-level-form)))
+                   (- (program (binding ...) top-level-form))
+                   (+ (program eni (binding ...) top-level-form)))
   (lambda (lambda)
     (- (#%plain-lambda eni1 boolean (binding2 ...) (binding3 ...) expr))
     (+ (#%plain-lambda eni1 boolean (binding2 ...) (binding3 ...) eni4 expr))))
@@ -523,10 +530,10 @@
                                   (parse-expr i env)) ...)]
                 [(#%top . id:id)
                  `(#%top . ,(parse-expr #'id env))]
-                [(#%variable-reference . id:id)
+                [(#%variable-reference id:id)
                  `(#%variable-reference ,(parse-expr #'id env))]
                 [(#%variable-reference (#%top . id:id))
-                 `(#%variable-reference-top (,((lookup-env env) #'id)))]
+                 `(#%variable-reference-top ,((lookup-env env) #'id))]
                 [(#%variable-reference)
                  `(#%variable-reference)]))
 
@@ -1013,12 +1020,16 @@
              (values `(#%unbox ,id) '() (list id)))]
         [(#%top . ,id)
          (values `(#%top . ,id) '() (list id))]
+        [(#%variable-reference)
+         (values `(#%variable-reference)
+                 null
+                 '(#f))]
         [(#%variable-reference ,id)
          (if (set-member? env id)
              (values `(#%variable-reference ,id) (list id) '())
              (values `(#%variable-reference ,id) '() (list id)))]
-        [(#%variable-reference-top (,id))
-         (values `(#%variable-reference-top (,id)) '() (list id))]
+        [(#%variable-reference-top ,id)
+         (values `(#%variable-reference-top ,id) '() (list id))]
         ;; Everything below here really is boilerplate
         [(case-lambda ,[lambda free-local free-global] ...)
          (values `(case-lambda ,lambda ...)
@@ -1144,17 +1155,27 @@
                        (define-values (y) '6)
                        (module foo racket/base (z x)
                          ((define-values (x) '12)
-                          (define-values (z) '13))))))))
+                          (define-values (z) '13))))))
+    (check-equal?
+     (compile/7 #'(lambda (x)
+                    (#%variable-reference)))
+     `(program (#f) (#%expression
+                     (#%plain-lambda (x.1)
+                                     (free () (#f)
+                                           (#%variable-reference))))))))
 
 (define-pass raise-toplevel-variables : L5 (e) -> L6 ()
   [CompilationTop : compilation-top (e [globals '()]) -> compilation-top ()
-                  [(program (,id ...) ,top-level-form)
-                   `(program (,id ...) ,(TopLevelForm top-level-form id))]]
+                  [(program (,binding ...) ,top-level-form)
+                   `(program (,binding ...) ,(TopLevelForm top-level-form binding))]]
   (Expr : expr (e [globals '()]) -> expr ()
         [(set!-values (,id) ,[expr])
          (guard (set-member? globals id))
          `(set!-global ,id ,expr)]
-        [,id (guard (set-member? globals id)) `(#%top . ,id)])
+        [,id (guard (set-member? globals id)) `(#%top . ,id)]
+        [(#%variable-reference ,id)
+         (guard (set-member? globals id))
+         `(#%variable-reference-top ,id)])
   (FBody : free-body (e [globals '()]) -> free-body ())
   (Lambda : lambda (e [globals '()]) -> lambda ()
           #;[(#%plain-lambda (,id ...) ,[fbody])
@@ -1201,6 +1222,13 @@
     (check-equal?
      (compile/8 #'(begin
                     (define x 5)
+                    (#%variable-reference x)))
+     `(program (x) (begin*
+                     (define-values (x) '5)
+                     (#%variable-reference-top x))))
+    (check-equal?
+     (compile/8 #'(begin
+                    (define x 5)
                     (lambda (y)
                       (lambda (z)
                         (+ x y z)))))
@@ -1238,7 +1266,7 @@
   [Expr : expr (e) -> expr ()
         [(letrec () ,[expr])
          expr]
-        [(letrec ([,id (#%plain-lambda ,formals (free (,id1* ...) (,id2* ...) ,expr*))] ...)
+        [(letrec ([,id (#%plain-lambda ,formals (free (,id1* ...) (,binding2* ...) ,expr*))] ...)
            ,expr)
          (define empty-index
            (for/fold ([acc #f])
@@ -1251,18 +1279,18 @@
                               ,(Expr (with-output-language (L6 expr)
                                        `(#%plain-lambda ,(list-ref formals empty-index)
                                                         (free (,(list-ref id1* empty-index) ...)
-                                                              (,(list-ref id2* empty-index) ...)
+                                                              (,(list-ref binding2* empty-index) ...)
                                                               ,(list-ref expr* empty-index))))))])
                 ,(Expr (with-output-language (L6 expr)
                          `(letrec ([,(remove-index id empty-index)
                                     (#%plain-lambda ,(remove-index formals empty-index)
                                                     (free (,(remove-index id1* empty-index) ...)
-                                                          (,(remove-index id2* empty-index) ...)
+                                                          (,(remove-index binding2* empty-index) ...)
                                                           ,(remove-index expr* empty-index)))]
                                    ...)
                             ,expr))))
              `(letrec ([,id (#%plain-lambda ,(map Formals formals)
-                                            (free (,id1* ...) (,id2* ...)
+                                            (free (,id1* ...) (,binding2* ...)
                                                   ,(map Expr expr*)))] ...)
                 ,(Expr expr)))]])
 
@@ -1362,17 +1390,17 @@
       (values (length indices) (car indices))))
   (Lambda : lambda (e [env '()] [frame 0] [global-env '()] [prefix-frame 0]) -> lambda ()
           [(#%plain-lambda ,formals
-                           (free (,id2 ...) (,id3 ...)
+                           (free (,id2 ...) (,binding3 ...)
                                  ,expr))
            (define params (formals->identifiers* formals))
            (define rest? (formals-rest?* formals))
            (define-values (env* frame*) (extend-env env frame (reverse (append id2 params))))
-           (define frame** (if (= (length id3) 0) frame* (+ frame* 1)))
+           (define frame** (if (= (length binding3) 0) frame* (+ frame* 1)))
            (define locals (map (var->index env frame global-env) id2))
            `(#%plain-lambda ,(length params)
                             ,rest?
-                            (,(if (= (length id3) 0) locals (cons (- frame prefix-frame) locals)) ...)
-                            (,(map ((curry dict-ref) global-env) id3) ...)
+                            (,(if (= (length binding3) 0) locals (cons (- frame prefix-frame) locals)) ...)
+                            (,(map ((curry dict-ref) global-env) binding3) ...)
                             ,(Expr expr env* frame** global-env frame**))])
   (Expr : expr (e [env '()] [frame 0] [global-env '()] [prefix-frame 0]) -> expr ()
         [,id ((var->index env frame global-env) id)]
@@ -1388,7 +1416,9 @@
         [(set!-global ,id ,[expr])
          `(set!-global ,(- frame prefix-frame) ,(dict-ref global-env id) ,expr)]
         [(#%top . ,id) `(#%top ,(- frame prefix-frame) ,(dict-ref global-env id))]
-        [(#%variable-reference-top (,id)) `(#%variable-reference-top (0))] ;; TODO: Global vars
+        [(#%variable-reference)
+         `(#%variable-reference-none ,(- frame prefix-frame) ,(hash-ref global-env #f))]
+        [(#%variable-reference-top ,id) `(#%variable-reference-top 0)] ;; TODO: Global vars
         [(#%variable-reference ,id) `(#%variable-reference ,((var->index env frame) id))]
         [(let ([,id ,expr1])
            ,expr)
@@ -1443,8 +1473,8 @@
   (ModuleLevelForm : module-level-form (e [env '()] [frame 0] [global-env '()] [prefix-frame 0])
                    -> module-level-form ())
   (CompilationTop : compilation-top (e) -> compilation-top ()
-                  [(program (,id ...) ,top-level-form)
-                   `(program (,id ...) ,(TopLevelForm top-level-form '() 0 (make-global-env id) 0))]))
+                  [(program (,binding ...) ,top-level-form)
+                   `(program (,binding ...) ,(TopLevelForm top-level-form '() 0 (make-global-env binding) 0))]))
 
 (module+ test
   (define-compiler-test L9 compilation-top
@@ -1572,8 +1602,8 @@
                        [(define-syntaxes (,id ...) ,[expr depth])
                         (values `(define-syntaxes (,id ...) ,expr) depth)])
   (CompilationTop : compilation-top (e) -> compilation-top ()
-                  [(program (,id ...) ,[top-level-form depth])
-                   `(program ,depth (,id ...) ,top-level-form)]))
+                  [(program (,binding ...) ,[top-level-form depth])
+                   `(program ,depth (,binding ...) ,top-level-form)]))
 
 (module+ test
   (define-compiler-test L10 compilation-top
@@ -1604,10 +1634,10 @@
     (define zo-void
       (zo:primval 35)))
   (CompilationTop : compilation-top (e) -> * ()
-                  [(program ,eni (,id ...) ,top-level-form)
+                  [(program ,eni (,binding ...) ,top-level-form)
                    (zo:compilation-top eni
                                        (hash)
-                                       (zo:prefix 0 id '() 'missing)
+                                       (zo:prefix 0 binding '() 'missing)
                                        (TopLevelForm top-level-form))])
   (TopLevelForm : top-level-form (e) -> * ()
                 [(#%expression ,expr)
@@ -1644,10 +1674,12 @@
                         (void)]
                        [(#%require ,raw-require-spec ...)
                         (void)])
-  [Binding : binding (e) -> * ()
-           [,eni eni]
-           [(primitive ,eni)
-            (zo:primval eni)]]
+  (Bidnding : binding (e) -> * ()
+            [,false false]
+            [,id id]
+            [,eni eni]
+            [(primitive ,eni)
+             (zo:primval eni)])
   (Expr : expr (e) -> * ()
         [,eni (zo:localref #f eni #f #f #f)]
         [(closure ,id ,lambda) (zo:closure (Lambda lambda) id)]
@@ -1696,12 +1728,12 @@
          (zo:with-cont-mark (Expr expr1) (Expr expr2) (Expr expr3))]
         [(#%plain-app ,expr ,expr* ...)
          (zo:application (Expr expr) (map Expr expr*))]
-        [(#%variable-reference-top (,eni))
+        [(#%variable-reference-top ,eni)
          (zo:varref (zo:toplevel 0 0 #f #f) (zo:toplevel 0 0 #f #f))]
         [(#%variable-reference ,eni)
          (zo:varref (zo:toplevel 0 0 #f #f) (zo:toplevel 0 0 #f #f))]
-        [(#%variable-reference)
-         (zo:varref (zo:toplevel 0 0 #f #f) (zo:toplevel 0 0 #f #f))])
+        [(#%variable-reference-none ,eni1 ,eni2)
+         (zo:varref (zo:toplevel eni1 eni2 #f #f) (zo:toplevel eni1 eni2 #f #f))])
   (Lambda : lambda (e) -> * ()
           [(#%plain-lambda ,eni ,boolean (,binding2 ...) (,binding3 ...) ,eni4 ,expr)
            (zo:lam (gensym)
@@ -1777,7 +1809,7 @@
                                   (set! x (+ x 1))
                                   (set! y (+ y 1))
                                   (+ x y))))
-           #;(compile-compare #'(eval '(+ 1 2)
+           (compile-compare #'(eval '(+ 1 2)
                                     (variable-reference->namespace
                                      (#%variable-reference))))
            #;(compile-compare #'(call/cc (lambda (x) 5))))
