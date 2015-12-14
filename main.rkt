@@ -1,6 +1,8 @@
 #lang racket/base
 
 (require nanopass/base
+         ;(except-in nanopass/base define-pass)
+         ;(rename-in nanopass/base [define-pass nanopass:define-pass])
          syntax/parse
          racket/match
          racket/set
@@ -9,6 +11,7 @@
          racket/list
          racket/function
          racket/bool
+         racket/stxparam
          compiler/zo-marshal
          syntax/toplevel
          rackunit
@@ -17,7 +20,8 @@
                     [compile base:compile])
          (for-syntax racket/base
                      syntax/parse
-                     racket/syntax))
+                     racket/syntax
+                     racket/stxparam-exptime))
 
 (require/expose compiler/decompile (primitive-table))
 
@@ -110,22 +114,23 @@
       (with-input-from-bytes zo
         (lambda () (read))))))
 
+; Defines a list of languages for nanopass, starting with Lsrc, then L1, L2, etc.
 (define-syntax (define-languages stx)
   (syntax-parse stx
-    [(_ ((~datum language) src ...) ((~datum language) rest ...) ...)
-     #:with Lsrc (format-id stx "Lsrc")
+    [(_ name:id ((~datum language) src ...) ((~datum language) rest ...) ...)
+     #:with Lsrc (format-id stx "~asrc" #'name)
      (define rlist (syntax->list #'((rest ...) ...)))
      #`(begin
          (define-language Lsrc src ...)
          #,@(for/list ([lang (in-list rlist)]
                        [i (in-range (length rlist))])
               (define Li (if (= i 0)
-                             (format-id stx "Lsrc")
-                             (format-id stx "L~a" i)))
+                             (format-id stx "~asrc" #'name)
+                             (format-id stx "~a~a" #'name i)))
               (define Li+1 (format-id stx "L~a" (+ i 1)))
               #`(define-language #,Li+1 (extends #,Li) #,@lang)))]))
 
-(define-languages
+(define-languages L
   (language
    (terminals
     (raw-require-spec (raw-require-spec))
@@ -373,8 +378,54 @@
                  [(,id (... ...))             #f]
                  [(,id ,id* (... ...) . ,id2) #t]))
 
+(begin-for-syntax
+  (struct language-box (language)
+    #:mutable
+    #:transparent
+    #:property prop:rename-transformer
+    (lambda (inst)
+      (syntax-property (language-box-language inst)
+                       'not-free-identifier=?
+                       #t))))
+(define-syntax (set-language! stx)
+  (syntax-parse stx
+    [(_ box language)
+     (define-values (val trans) (syntax-local-value/immediate #'box))
+     (set-language-box-language! val #'language)
+     #'(void)]))
+(define-syntax (update-current-languages! stx)
+  (syntax-parse stx
+    [(_ language:id)
+     (define-values (val trans) (syntax-local-value/immediate #'current-source))
+     (define-values (val* trans*) (syntax-local-value/immediate #'current-target))
+     (set! current-language-number (+ current-language-number 1))
+     (set-language-box-language! val (format-id stx "~a~a" #'language
+                                                (if (= current-language-number 0)
+                                                    "src"
+                                                    current-language-number)))
+     (set-language-box-language! val* (format-id stx "~a~a" #'language
+                                                 (if (= (+ current-language-number 1) 0)
+                                                     "src"
+                                                     (+ current-language-number 1))))
+     #'(void)
+     #;#`(begin
+         (set-language! current-source-top #,(format-id stx "~a~a" #'language
+                                                        (if (= current-language-number 0)
+                                                            "src"
+                                                            current-language-number)))
+         (set-language! current-target-top #,(format-id stx "~a~a" #'language
+                                                        (if (= (+ current-language-number 1) 0)
+                                                            "src"
+                                                            (+ current-language-number)))))]))
+
+(define-syntax current-source (language-box #'Lsrc))
+(define-syntax current-target (language-box #'Lsrc))
+(define-syntax-parameter current-source-param #'current-source-top)
+(define-syntax-parameter current-target-param #'current-target-top)
+(define-for-syntax current-language-number -1)
+
 ;; Parse and alpha-rename expanded program
-(define-pass parse-and-rename : * (form) -> Lsrc ()
+(define-pass parse-and-rename : * (form) -> current-target ()
   (definitions
     (define initial-env (hash))
     (define (extend-env env vars)
@@ -592,7 +643,9 @@
      `(#%expression (#%plain-lambda (a.1 b.3 . c.2)
                                     (#%plain-app (primitive apply) (primitive +) a.1 b.3 c.2))))))
 
-(define-pass make-begin-explicit : Lsrc (e) -> L1 ()
+(update-current-languages! L)
+
+(define-pass make-begin-explicit : current-source (e) -> current-target ()
   (Expr : expr (e) -> expr ()
         [(#%plain-lambda ,[formals] ,[expr*] ... ,[expr])
          (if (= (length expr*) 0)
@@ -648,7 +701,9 @@
           (#%plain-app (primitive display) '"Hello")
           f.1)))))
 
-(define-pass identify-assigned-variables : L1 (e) -> L2 ()
+(update-current-languages! L)
+
+(define-pass identify-assigned-variables : current-source (e) -> current-target ()
   (definitions
     (define-syntax-rule (formals->identifiers* fmls)
       (formals->identifiers L2 fmls)))
@@ -749,7 +804,9 @@
                                                 (set! x.1 '42)
                                                 x.1)))))))
 
-(define-pass purify-letrec : L2 (e) -> L3 ()
+(update-current-languages! L)
+
+(define-pass purify-letrec : current-source (e) -> current-target ()
   (Expr : expr (e) -> expr ()
         [(set! ,id ,[expr])
          `(set!-values (,id) ,expr)]
@@ -784,7 +841,7 @@
               (assigned (,id* ...)
                         ,expr*)))]))
 
-(define-pass optimize-direct-call : L3 (e) -> L3 ()
+(define-pass optimize-direct-call : current-target (e) -> current-target ()
   (Expr : expr (e) -> expr ()
         [(#%plain-app (#%plain-lambda (,id ...) ,[abody])
                       ,[expr* -> expr*] ...)
@@ -853,7 +910,9 @@
                       (set!-values (x.1) y.2)
                       y.2)))))))
 
-(define-pass convert-assignments : L3 (e) -> L4 ()
+(update-current-languages! L)
+
+(define-pass convert-assignments : current-source (e) -> current-target ()
   (definitions
     (define ((lookup-env env) x)
       (dict-ref env x x))
