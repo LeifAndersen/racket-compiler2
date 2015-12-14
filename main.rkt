@@ -1812,7 +1812,13 @@
            (compile-compare #'(eval '(+ 1 2)
                                     (variable-reference->namespace
                                      (#%variable-reference))))
-           (compile-compare #'(call-with-current-continuation (lambda (x) 5))))
+           (compile-compare #'(call-with-current-continuation (lambda (x) 5)))
+           (compile-compare #'(begin
+                                (module foo racket
+                                  (provide x)
+                                  (define x 5))
+                                (require 'foo)
+                                x)))
          all-compiler-tests)))
 
 (define-syntax (define-compiler stx)
