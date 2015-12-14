@@ -313,7 +313,7 @@
              expr)
            (set!-boxes eni1 eni2 expr)
            (set!-values eni1 eni2 expr)
-           (set!-global eni1 expr)
+           (set!-global eni1 eni2 expr)
            (#%box eni)
            (#%unbox eni)
            (#%top eni1 eni2)
@@ -1386,7 +1386,7 @@
          (define-values (count offset) (ids->range env frame id))
          `(set!-boxes ,count ,offset ,expr)]
         [(set!-global ,id ,[expr])
-         `(set!-global ,(dict-ref global-env id) ,expr)]
+         `(set!-global ,(- frame prefix-frame) ,(dict-ref global-env id) ,expr)]
         [(#%top . ,id) `(#%top ,(- frame prefix-frame) ,(dict-ref global-env id))]
         [(#%variable-reference-top (,id)) `(#%variable-reference-top (0))] ;; TODO: Global vars
         [(#%variable-reference ,id) `(#%variable-reference ,((var->index env frame) id))]
@@ -1512,12 +1512,20 @@
          (values `(set!-values ,eni1 ,eni2 ,expr) depth)]
         [(set!-boxes ,eni1 ,eni2 ,[expr depth])
          (values `(set!-boxes ,eni1 ,eni2 ,expr) depth)]
+        [(set!-global ,eni1 ,eni2 ,[expr depth])
+         (values `(set!-global ,eni1 ,eni2 ,expr) depth)]
         [(case-lambda ,[lambda depth] ...)
          (values `(case-lambda ,lambda ...)
                  (apply max 0 depth))]
         [(if ,[expr1 depth1] ,[expr2 depth2] ,[expr3 depth3])
          (values `(if ,expr1 ,expr2 ,expr3)
                  (max depth1 depth2 depth3))]
+        [(begin ,[expr* depth*] ... ,[expr depth])
+         (values `(begin ,expr* ... ,expr)
+                 (apply max depth depth*))]
+        [(begin0 ,[expr* depth*] ... ,[expr depth])
+         (values `(begin0 ,expr* ... ,expr)
+                 (apply max depth depth*))]
         [(with-continuation-mark ,[expr1 depth1] ,[expr2 depth2] ,[expr3 depth3])
          (values `(with-continuation-mark ,expr1 ,expr2 ,expr3)
                  (max depth1 depth2 depth3))]
@@ -1663,8 +1671,8 @@
          (zo:install-value eni1 eni2 #f (Expr expr) zo-void)]
         [(set!-boxes ,eni1 ,eni2 ,expr)
          (zo:install-value eni1 eni2 #t (Expr expr) zo-void)]
-        [(set!-global ,eni ,expr)
-         (zo:assign (zo:toplevel 0 eni #f #f) (Expr expr) #f)]
+        [(set!-global ,eni1 ,eni2 ,expr)
+         (zo:assign (zo:toplevel eni1 eni2 #f #f) (Expr expr) #f)]
         [(letrec (,lambda ...) ,expr)
          (zo:let-rec (map Lambda lambda) (Expr expr))]
         [(let-one ,expr1 ,expr)
