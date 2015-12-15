@@ -452,7 +452,7 @@
     (define initial-env (hash))
     (define (extend-env env vars)
       (for/fold ([acc env])
-                ([var vars])
+                ([var (in-list vars)])
         (define var* (syntax->datum var))
         (dict-set acc var* ((fresh) var*))))
     (define ((lookup-env env) var)
@@ -673,42 +673,42 @@
                    (,[module-level-form pre post] ...))
                  `(module ,id ,module-path
                     (,module-level-form ...)
-                    (,pre ...)
-                    (,post ...))])
-  (SubmoduleForm : submodule-form (e) -> module-level-form ('() '())
+                    (,(remove* '(#f) pre) ...)
+                    (,(remove* '(#f) post) ...))])
+  (SubmoduleForm : submodule-form (e) -> module-level-form (#f #f)
                  [(submodule ,id ,module-path
                              (,[module-level-form pre post] ...))
                   (values `(#%plain-app void)
                           (with-output-language (L1 submodule-form)
-                            (list `(module ,id ,module-path
-                                     (,module-level-form ...)
-                                     (,pre ...)
-                                     (,post ...))))
-                          null)]
+                            `(module ,id ,module-path
+                               (,module-level-form ...)
+                               (,(remove* '(#f) pre) ...)
+                               (,(remove* '(#f) post) ...)))
+                          #f)]
                  [(submodule* ,id ,module-path
                               (,[module-level-form pre post] ...))
                   (values `(#%plain-app void)
-                          null
+                          #f
                           (with-output-language (L1 submodule-form)
-                            (list `(module ,id ,module-path
-                                     (,module-level-form ...)
-                                     (,pre ...)
-                                     (,post ...)))))]
+                            `(module ,id ,module-path
+                               (,module-level-form ...)
+                               (,(remove* '(#f) pre) ...)
+                               (,(remove* '(#f) post) ...))))]
                  [(submodule* ,id
                               (,[module-level-form pre post] ...))
                   (values `(#%plain-app void)
-                          null
+                          #f
                           (with-output-language (L1 submodule-form)
-                            (list `(module ,id #f
-                                     (,module-level-form ...)
-                                     (,pre ...)
-                                     (,post ...)))))])
-  (ModuleLevelForm : module-level-form (e) -> module-level-form ('() '())
-                   [(begin-for-syntax ,[module-level-form pre post])
-                    (values `(begin-for-syntax ,module-level-form)
+                            `(module ,id #f
+                               (,module-level-form ...)
+                               (,(remove* '(#f) pre) ...)
+                               (,(remove* '(#f) post) ...))))])
+  (ModuleLevelForm : module-level-form (e) -> module-level-form (#f #f)
+                   [(begin-for-syntax ,[module-level-form pre post] ...)
+                    (values `(begin-for-syntax ,module-level-form ...)
                             pre post)])
-  (GeneralTopLevelForm : general-top-level-form (e) -> general-top-level-form ('() '()))
-  (Expr : expr (e) -> expr ('() '())))
+  (GeneralTopLevelForm : general-top-level-form (e) -> general-top-level-form (#f #f))
+  (Expr : expr (e) -> expr (#f #f)))
 
 (module+ test
   (define-compiler-test L1 top-level-form
@@ -727,9 +727,9 @@
          (define-values (x) '5)
          (#%plain-app void))
         ((module bar racket/base
-           (12) () ()))
+           ('12) () ()))
         ((module baz racket/base
-           (1) () ()))))))
+           ('1) () ()))))))
 
 (update-current-languages! L)
 
@@ -1236,10 +1236,10 @@
                     (,[module-level-form free-local free-global] ...)
                     (,[submodule-form** free-local** free-global**] ...)
                     (,[submodule-form* free-local* free-global*] ...))
-                  (values `(module ,id ,module-level-form (,(apply set-union '() free-global) ...)
+                  (values `(module ,id ,module-path (,(apply set-union '() free-global) ...)
                                    (,module-level-form ...)
                                    (,submodule-form** ...)
-                                   (,submodule-form* ))
+                                   (,submodule-form* ...))
                           '() '())])
   (let-values ([(e* local* global*) (TopLevelForm e '())])
     `(program (,global* ...) ,e*)))
@@ -1514,13 +1514,13 @@
       (formals-rest? L9 fmls))
     (define (extend-env env start ids)
       (for/fold ([env env] [ref start])
-                ([i ids])
+                ([i (in-list ids)])
         (values (dict-set env i (+ ref 1)) (+ ref 1))))
     (define (lookup-env env id)
       (dict-ref env id))
     (define (make-global-env ids)
       (for/fold ([env (hash)])
-                ([i ids] [index (in-range (length ids))])
+                ([i (in-list ids)] [index (in-range (length ids))])
         (hash-set env i index)))
     (define ((var->index env frame global-env) id)
       (if (dict-has-key? env id)
