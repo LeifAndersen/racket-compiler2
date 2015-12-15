@@ -191,6 +191,29 @@
             (id ...)
             (id id* ... . id2)))
 
+  (language)
+  #;(language
+   (top-level-form (top-level-form)
+                   (- (module id module-path
+                        (module-level-form ...)))
+                   (+ (module id module-path
+                        (module-level-form ...)
+                        (submodule-form ...)
+                        (submodule-form* ...))))
+   (module-level-form (module-level-form)
+                      (- submodule-form))
+   (submodule-form (submodule-form)
+                   (- (submodule id module-path
+                                 (module-level-form ...))
+                      (submodule* id module-path
+                                  (module-level-form ...))
+                      (submodule* id
+                                  (module-level-form ...)))
+                   (+ (submodule id module-path
+                                 (module-level-form ...)
+                                 (submodule-form ...)
+                                 (submodule-form* ...)))))
+
   (language
    (lambda (lambda)
      (+ (#%plain-lambda formals expr)))
@@ -645,6 +668,10 @@
 
 (update-current-languages! L)
 
+(define-pass lift-submodules : current-source (e) -> current-target ())
+
+(update-current-languages! L)
+
 (define-pass make-begin-explicit : current-source (e) -> current-target ()
   (Expr : expr (e) -> expr ()
         [(#%plain-lambda ,[formals] ,[expr*] ... ,[expr])
@@ -652,13 +679,13 @@
              `(#%plain-lambda ,formals ,expr)
              `(#%plain-lambda ,formals (begin ,expr* ... ,expr)))]
         [(case-lambda (,formals ,expr* ... ,expr))
-         (with-output-language (Lsrc expr)
+         (with-output-language (L1 expr)
            (make-begin-explicit `(#%plain-lambda ,formals ,expr* ... ,expr)))]
         [(case-lambda (,formals ,expr* ... ,expr) ...)
          `(case-lambda ,(for/list ([f (in-list formals)]
                                    [e* (in-list expr*)]
                                    [e (in-list expr)])
-                          (with-output-language (Lsrc expr)
+                          (with-output-language (L1 expr)
                             (make-begin-explicit `(#%plain-lambda ,f ,e* ... ,e))))
                        ...)]
         [(let-values ([(,id ...) ,[expr1]] ...)
@@ -677,23 +704,23 @@
                 (begin ,expr* ... ,expr)))]))
 
 (module+ test
-  (define-compiler-test L1 top-level-form
+  (define-compiler-test L2 top-level-form
     (check-equal?
-     (compile/2 #'(lambda (x) x x))
+     (compile/3 #'(lambda (x) x x))
      `(#%expression (#%plain-lambda (x.1) (begin x.1 x.1))))
     (check-equal?
-     (compile/2 #'(case-lambda [(x) (+ x 1) (begin0 x (set! x 42))]))
+     (compile/3 #'(case-lambda [(x) (+ x 1) (begin0 x (set! x 42))]))
      `(#%plain-lambda (x.1)
                       (begin (#%plain-app (primitive +) x.1 '1)
                              (begin0 x.1
                                (set! x.1 '42)))))
     (check-equal?
-     (compile/2 #'(case-lambda [(x) (+ x 1)]
+     (compile/3 #'(case-lambda [(x) (+ x 1)]
                                [(x y) x (+ x y)]))
      `(case-lambda (#%plain-lambda (x.1) (#%plain-app (primitive +) x.1 '1))
                    (#%plain-lambda (x.2 y.3) (begin x.2 (#%plain-app (primitive +) x.2 y.3)))))
     (check-equal?
-     (compile/2 #'(letrec ([f 5])
+     (compile/3 #'(letrec ([f 5])
                     (display "Hello")
                     f))
      `(letrec-values ([(f.1) '5])
@@ -706,7 +733,7 @@
 (define-pass identify-assigned-variables : current-source (e) -> current-target ()
   (definitions
     (define-syntax-rule (formals->identifiers* fmls)
-      (formals->identifiers L2 fmls)))
+      (formals->identifiers L3 fmls)))
   (Lambda : lambda (e) -> lambda ('())
           [(#%plain-lambda ,[formals] ,[expr assigned*])
            (values `(#%plain-lambda ,formals
@@ -770,15 +797,15 @@
     e*))
 
 (module+ test
-  (define-compiler-test L2 top-level-form
+  (define-compiler-test L3 top-level-form
     (check-equal?
-     (compile/3 #'(letrec ([y 8])
+     (compile/4 #'(letrec ([y 8])
                     y))
      `(letrec-values ([(y.1) '8])
         (assigned ()
           y.1)))
     (check-equal?
-     (compile/3 #'(let ([x 8])
+     (compile/4 #'(let ([x 8])
                     (set! x 5)
                     (+ x 42)))
      `(let-values ([(x.1) '8])
@@ -786,7 +813,7 @@
                   (begin (set! x.1 '5)
                          (#%plain-app (primitive +) x.1 '42)))))
     (check-equal?
-     (compile/3 #'(let ([x 1])
+     (compile/4 #'(let ([x 1])
                     (letrec ([y (lambda (x) y)])
                       (+ x y))))
      `(let-values ([(x.1) '1])
@@ -795,7 +822,7 @@
             (assigned ()
                       (#%plain-app (primitive +) x.1 y.2))))))
     (check-equal?
-     (compile/3 #'(lambda x
+     (compile/4 #'(lambda x
                     (set! x 42)
                     x))
      `(#%expression (#%plain-lambda x.1
@@ -851,21 +878,21 @@
               ,abody))]))
 
 (module+ test
-  (define-compiler-test L3 top-level-form
+  (define-compiler-test L4 top-level-form
     (check-equal?
-     (compile/5 #'((lambda (x) x) (lambda (y) y)))
+     (compile/6 #'((lambda (x) x) (lambda (y) y)))
      `(let ([x.2 (#%plain-lambda (y.1) (assigned () y.1))])
         (begin-set!
           (assigned () x.2))))
     (check-equal?
-     (compile/5 #'(letrec-values ([(a) (lambda (x) b)]
+     (compile/6 #'(letrec-values ([(a) (lambda (x) b)]
                                   [(b) (lambda (y) a)])
                     (a b)))
      `(letrec ([a.1 (#%plain-lambda (x.3) (assigned () b.2))]
                [b.2 (#%plain-lambda (y.4) (assigned () a.1))])
         (#%plain-app a.1 b.2)))
     (check-equal?
-     (compile/5 #'(letrec-values ([(a) 5]
+     (compile/6 #'(letrec-values ([(a) 5]
                                   [(b c) (values 6 7)])
                     (+ a b c)))
      `(let ([a.1 (undefined)]
@@ -877,13 +904,13 @@
           (assigned (c.3 b.2 a.1)
                     (#%plain-app (primitive +) a.1 b.2 c.3)))))
     (check-equal?
-     (compile/5 #'(let ([x (if #t 5 6)])
+     (compile/6 #'(let ([x (if #t 5 6)])
                     (set! x (+ x 1))))
      `(let ([x.1 (if '#t '5 '6)])
         (begin-set!
           (assigned (x.1) (set!-values (x.1) (#%plain-app (primitive +) x.1 '1))))))
     (check-equal?
-     (compile/5 #'(let-values ([(x y) (values 1 2)]
+     (compile/6 #'(let-values ([(x y) (values 1 2)]
                                [(z) 3])
                     (set! x 5)
                     (+ y z)))
@@ -898,7 +925,7 @@
                       (set!-values (x.1) '5)
                       (#%plain-app (primitive +) y.2 z.3))))))
     (check-equal?
-     (compile/5 #'(let-values ([(x y) (values 1 2)])
+     (compile/6 #'(let-values ([(x y) (values 1 2)])
                     (set! x y)
                     y))
      `(let ([x.1 (undefined)]
@@ -920,7 +947,7 @@
       ;(define temp* (map (fresh) assigned*))
       (define temp* assigned*)
       (append (map cons assigned* temp*) env))
-    (with-output-language (L4 expr)
+    (with-output-language (L5 expr)
       (define (build-let id* expr* body)
         (if (null? id*)
             body
@@ -968,9 +995,9 @@
              `(set!-values (,(map (lookup-env env) id) ...) ,expr*))]])
 
 (module+ test
-  (define-compiler-test L4 top-level-form
+  (define-compiler-test L5 top-level-form
     (check-equal?
-     (compile/6 #'(let ([x 5])
+     (compile/7 #'(let ([x 5])
                     (set! x 6)
                     x))
      `(let ([x.1 '5])
@@ -980,7 +1007,7 @@
             (set!-boxes (x.1) '6)
             (#%unbox x.1)))))
     (check-equal?
-     (compile/6 #'(lambda (x y)
+     (compile/7 #'(lambda (x y)
                     (set! x 5)
                     (list x y)))
      `(#%expression (#%plain-lambda (x.1 y.2)
@@ -990,7 +1017,7 @@
                                         (set!-boxes (x.1) '5)
                                         (#%plain-app (primitive list) (#%unbox x.1) y.2))))))
     (check-equal?
-     (compile/6 #'(lambda x
+     (compile/7 #'(lambda x
                     (let ()
                       (set! x 42)
                       (+ x 8))))
@@ -1001,7 +1028,7 @@
                                         (set!-boxes (x.1) '42)
                                         (#%plain-app (primitive +) (#%unbox x.1) '8))))))
     (check-equal?
-     (compile/6 #'(let-values ([(x y) (values 1 2)])
+     (compile/7 #'(let-values ([(x y) (values 1 2)])
                     (set! x y)
                     y))
      `(let ([x.1 (undefined)]
@@ -1019,7 +1046,7 @@
 (define-pass uncover-free : current-source (e) -> current-target ()
   (definitions
     (define-syntax-rule (formals->identifiers* formals)
-      (formals->identifiers L5 formals)))
+      (formals->identifiers L6 formals)))
   (Lambda : lambda (e [env '()]) -> lambda ('() '())
           [(#%plain-lambda ,[formals] ,expr*)
            (define id* (formals->identifiers* formals))
@@ -1168,9 +1195,9 @@
     `(program (,global* ...) ,e*)))
 
 (module+ test
-  (define-compiler-test L5 compilation-top
+  (define-compiler-test L6 compilation-top
     (check-equal?
-     (compile/7 #'(lambda (x)
+     (compile/8 #'(lambda (x)
                     (lambda (y)
                       x)))
      `(program () (#%expression
@@ -1180,7 +1207,7 @@
                                                          (free (x.1) ()
                                                                x.1)))))))
     (check-equal?
-     (compile/7 #'(let ([x 5])
+     (compile/8 #'(let ([x 5])
                     (lambda (y)
                       x)))
      `(program () (let ([x.1 '5])
@@ -1188,7 +1215,7 @@
                                     (free (x.1) ()
                                           x.1)))))
     (check-equal?
-     (compile/7 #'(begin
+     (compile/8 #'(begin
                     (define x 5)
                     (lambda y (if x 4 5))))
      `(program (x) (begin*
@@ -1198,19 +1225,19 @@
                                       (free () (x)
                                             (if x '4 '5)))))))
     (check-equal?
-     (compile/7 #'(begin
+     (compile/8 #'(begin
                     (define x 5)
                     (set! x 6)))
      `(program (x) (begin*
                     (define-values (x) '5)
                     (set!-values (x) '6))))
     (check-equal?
-     (compile/7 #'(letrec ([f (lambda (x) x)])
+     (compile/8 #'(letrec ([f (lambda (x) x)])
                     (f 12)))
      `(program () (letrec ([f.1 (#%plain-lambda (x.2) (free () () x.2))])
                     (#%plain-app f.1 '12))))
     (check-equal?
-     (compile/7 #'(begin
+     (compile/8 #'(begin
                     (define x 5)
                     (define y 6)
                     (module foo racket/base
@@ -1224,7 +1251,7 @@
                          ((define-values (x) '12)
                           (define-values (z) '13))))))
     (check-equal?
-     (compile/7 #'(lambda (x)
+     (compile/8 #'(lambda (x)
                     (#%variable-reference)))
      `(program (#f) (#%expression
                      (#%plain-lambda (x.1)
@@ -1278,9 +1305,9 @@
                                    (ModuleLevelForm mlf id*)) ...))]))
 
 (module+ test
-  (define-compiler-test L6 compilation-top
+  (define-compiler-test L7 compilation-top
     (check-equal?
-     (compile/8 #'(begin
+     (compile/9 #'(begin
                     (define x 5)
                     (set! x 6)
                     x))
@@ -1289,14 +1316,14 @@
                      (set!-global x '6)
                      (#%top . x))))
     (check-equal?
-     (compile/8 #'(begin
+     (compile/9 #'(begin
                     (define x 5)
                     (#%variable-reference x)))
      `(program (x) (begin*
                      (define-values (x) '5)
                      (#%variable-reference-top x))))
     (check-equal?
-     (compile/8 #'(begin
+     (compile/9 #'(begin
                     (define x 5)
                     (lambda (y)
                       (lambda (z)
@@ -1311,7 +1338,7 @@
                                                                   (#%plain-app
                                                                    (primitive +) (#%top . x) y.1 z.2)))))))))
     (check-equal?
-     (compile/8 #'(begin
+     (compile/9 #'(begin
                     (define x 5)
                     (let ([y 6])
                       (set! x (+ x 1))
@@ -1347,12 +1374,12 @@
          (if empty-index
              `(let ([,(list-ref id empty-index)
                      (closure ,(list-ref id empty-index)
-                              ,(Expr (with-output-language (L6 expr)
+                              ,(Expr (with-output-language (L7 expr)
                                        `(#%plain-lambda ,(list-ref formals empty-index)
                                                         (free (,(list-ref id1* empty-index) ...)
                                                               (,(list-ref binding2* empty-index) ...)
                                                               ,(list-ref expr* empty-index))))))])
-                ,(Expr (with-output-language (L6 expr)
+                ,(Expr (with-output-language (L7 expr)
                          `(letrec ([,(remove-index id empty-index)
                                     (#%plain-lambda ,(remove-index formals empty-index)
                                                     (free (,(remove-index id1* empty-index) ...)
@@ -1366,10 +1393,10 @@
                 ,(Expr expr)))]])
 
 (module+ test
-  (define-compiler-test L7 compilation-top
+  (define-compiler-test L8 compilation-top
     (check-equal?
-     (compile/9 #'(letrec ([f (lambda (x) x)])
-                    (f 12)))
+     (compile/10 #'(letrec ([f (lambda (x) x)])
+                     (f 12)))
      `(program () (let ([f.1 (closure f.1 (#%plain-lambda (x.2) (free () () x.2)))])
                     (#%plain-app f.1 '12))))))
 
@@ -1394,12 +1421,12 @@
                       ,expr))]))
 
 (module+ test
-  (define-compiler-test L8 compilation-top
+  (define-compiler-test L9 compilation-top
     (check-equal?
-     (compile/10 #'(let ([x 1]) x))
+     (compile/11 #'(let ([x 1]) x))
      `(program () (let ([x.1 '1]) x.1)))
     (check-equal?
-     (compile/10 #'(let ([x 1]
+     (compile/11 #'(let ([x 1]
                          [y 2])
                      (+ x y)))
      `(program () (let-void (x.1 y.2)
@@ -1408,7 +1435,7 @@
                               (set!-values (y.2) '2)
                               (#%plain-app (primitive +) x.1 y.2)))))
     (check-equal?
-     (compile/10 #'(let-values ([(x y) (values 1 2)]
+     (compile/11 #'(let-values ([(x y) (values 1 2)]
                                 [(z) 3])
                      (set! x 5)
                      (+ x y z)))
@@ -1422,7 +1449,7 @@
                                   (set!-boxes (x.1) '5)
                                   (#%plain-app (primitive +) (#%unbox x.1) y.2 z.3)))))))
     (check-equal?
-     (compile/10 #'(let ([x 5])
+     (compile/11 #'(let ([x 5])
                      (lambda (y)
                        (set! x 6)
                        (+ x y))))
@@ -1440,9 +1467,9 @@
 (define-pass debruijn-indices : current-source (e) -> current-target ()
   (definitions
     (define-syntax-rule (formals->identifiers* fmls)
-      (formals->identifiers L8 fmls))
+      (formals->identifiers L9 fmls))
     (define-syntax-rule (formals-rest?* fmls)
-      (formals-rest? L8 fmls))
+      (formals-rest? L9 fmls))
     (define (extend-env env start ids)
       (for/fold ([env env] [ref start])
                 ([i ids])
@@ -1552,16 +1579,16 @@
                    `(program (,binding ...) ,(TopLevelForm top-level-form '() 0 (make-global-env binding) 0))]))
 
 (module+ test
-  (define-compiler-test L9 compilation-top
+  (define-compiler-test L10 compilation-top
     (check-equal?
-     (compile/11 #'(lambda (x) x))
+     (compile/12 #'(lambda (x) x))
      `(program () (#%expression (#%plain-lambda 1 #f () () 0))))
     (check-equal?
-     (compile/11 #'(let ([x 5])
+     (compile/12 #'(let ([x 5])
                     (lambda (y . z) x)))
      `(program () (let-one '5 (#%plain-lambda 2 #t (0) () 0))))
     (check-equal?
-     (compile/11 #'(let ([x 5]
+     (compile/12 #'(let ([x 5]
                         [y 6])
                     (+ x y)))
      `(program () (let-void 2
@@ -1570,14 +1597,14 @@
                               (set!-values 1 1 '6)
                               (#%plain-app (primitive 247) 2 3)))))
     (check-equal?
-     (compile/11 #'(begin
+     (compile/12 #'(begin
                      (define x 5)
                      (+ x 5)))
      `(program (x) (begin*
                      (define-values (0) '5)
                      (#%plain-app (primitive 247) (#%top 2 0) '5))))
     (check-equal?
-     (compile/11 #'(begin
+     (compile/12 #'(begin
                      (define x 5)
                      (lambda (y)
                        y x)))
@@ -1683,13 +1710,13 @@
                    `(program ,depth (,binding ...) ,top-level-form)]))
 
 (module+ test
-  (define-compiler-test L10 compilation-top
+  (define-compiler-test L11 compilation-top
     (check-equal?
-     (compile/12 #'(lambda (x) (let ([y 5]) (+ x y))))
+     (compile/13 #'(lambda (x) (let ([y 5]) (+ x y))))
      `(program 1 () (#%expression
                      (#%plain-lambda 1 #f () () 10 (let-one '5 (#%plain-app (primitive 247) 3 2))))))
     (check-equal?
-     (compile/12 #'(if (= 5 6)
+     (compile/13 #'(if (= 5 6)
                        (let ([x '5]
                              [y '6])
                          y)
@@ -1930,6 +1957,7 @@
 (define-compiler compile
   expand-syntax*
   parse-and-rename
+  lift-submodules
   make-begin-explicit
   identify-assigned-variables
   purify-letrec
