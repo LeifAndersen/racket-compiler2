@@ -11,6 +11,9 @@
          racket/function
          racket/bool
          racket/stxparam
+         racket/stxparam-exptime
+         racket/block
+         racket/splicing
          compiler/zo-marshal
          syntax/toplevel
          rackunit
@@ -20,6 +23,7 @@
          (for-syntax racket/base
                      syntax/parse
                      racket/syntax
+                     racket/stxparam
                      racket/stxparam-exptime))
 
 (require/expose compiler/decompile (primitive-table))
@@ -417,8 +421,8 @@
 (define-syntax (update-current-languages! stx)
   (syntax-parse stx
     [(_ language:id)
-     (define-values (val trans) (syntax-local-value/immediate #'current-source))
-     (define-values (val* trans*) (syntax-local-value/immediate #'current-target))
+     (define-values (val trans) (syntax-local-value/immediate #'current-source-top))
+     (define-values (val* trans*) (syntax-local-value/immediate #'current-target-top))
      (set! current-language-number (+ current-language-number 1))
      (set-language-box-language! val (format-id stx "~a~a" #'language
                                                 (if (= current-language-number 0)
@@ -439,16 +443,18 @@
                                                             "src"
                                                             (+ current-language-number)))))]))
 
-(define-syntax current-source (language-box #'Lsrc))
-(define-syntax current-target (language-box #'Lsrc))
-(define-syntax-parameter current-source-param #'current-source-top)
-(define-syntax-parameter current-target-param #'current-target-top)
+(define-syntax current-source-top (language-box #'Lsrc))
+(define-syntax current-target-top (language-box #'Lsrc))
 (define-for-syntax current-language-number -1)
 
 (define-syntax (define-pass stx)
   (syntax-parse stx
     [(_ rest ...)
-     #'(nanopass:define-pass rest ...)]))
+     #:with current-source (format-id stx "current-source")
+     #:with current-target (format-id stx "current-target")
+     #'(splicing-let-syntax ([current-source (syntax-local-value #'current-source-top (lambda () #f))]
+                             [current-target (syntax-local-value #'current-target-top (lambda () #f))])
+         (nanopass:define-pass rest ...))]))
 
 ;; Parse and alpha-rename expanded program
 (define-pass parse-and-rename : * (form) -> current-target ()
@@ -744,13 +750,13 @@
              `(#%plain-lambda ,formals ,expr)
              `(#%plain-lambda ,formals (begin ,expr* ... ,expr)))]
         [(case-lambda (,formals ,expr* ... ,expr))
-         (with-output-language (L1 expr)
+         (with-output-language (current-source expr)
            (make-begin-explicit `(#%plain-lambda ,formals ,expr* ... ,expr)))]
         [(case-lambda (,formals ,expr* ... ,expr) ...)
          `(case-lambda ,(for/list ([f (in-list formals)]
                                    [e* (in-list expr*)]
                                    [e (in-list expr)])
-                          (with-output-language (L1 expr)
+                          (with-output-language (current-source expr)
                             (make-begin-explicit `(#%plain-lambda ,f ,e* ... ,e))))
                        ...)]
         [(let-values ([(,id ...) ,[expr1]] ...)
@@ -798,7 +804,7 @@
 (define-pass identify-assigned-variables : current-source (e) -> current-target ()
   (definitions
     (define-syntax-rule (formals->identifiers* fmls)
-      (formals->identifiers L3 fmls)))
+      (formals->identifiers current-target fmls)))
   (Lambda : lambda (e) -> lambda ('())
           [(#%plain-lambda ,[formals] ,[expr assigned*])
            (values `(#%plain-lambda ,formals
@@ -1012,7 +1018,7 @@
       ;(define temp* (map (fresh) assigned*))
       (define temp* assigned*)
       (append (map cons assigned* temp*) env))
-    (with-output-language (L5 expr)
+    (with-output-language (current-target expr)
       (define (build-let id* expr* body)
         (if (null? id*)
             body
@@ -1111,7 +1117,7 @@
 (define-pass uncover-free : current-source (e) -> current-target ()
   (definitions
     (define-syntax-rule (formals->identifiers* formals)
-      (formals->identifiers L6 formals)))
+      (formals->identifiers current-target formals)))
   (Lambda : lambda (e [env '()]) -> lambda ('() '())
           [(#%plain-lambda ,[formals] ,expr*)
            (define id* (formals->identifiers* formals))
@@ -1420,12 +1426,12 @@
          (if empty-index
              `(let ([,(list-ref id empty-index)
                      (closure ,(list-ref id empty-index)
-                              ,(Expr (with-output-language (L7 expr)
+                              ,(Expr (with-output-language (current-source expr)
                                        `(#%plain-lambda ,(list-ref formals empty-index)
                                                         (free (,(list-ref id1* empty-index) ...)
                                                               (,(list-ref binding2* empty-index) ...)
                                                               ,(list-ref expr* empty-index))))))])
-                ,(Expr (with-output-language (L7 expr)
+                ,(Expr (with-output-language (current-source expr)
                          `(letrec ([,(remove-index id empty-index)
                                     (#%plain-lambda ,(remove-index formals empty-index)
                                                     (free (,(remove-index id1* empty-index) ...)
@@ -1513,7 +1519,7 @@
 (define-pass debruijn-indices : current-source (e) -> current-target ()
   (definitions
     (define-syntax-rule (formals->identifiers* fmls)
-      (formals->identifiers L9 fmls))
+      (formals->identifiers current-source fmls))
     (define-syntax-rule (formals-rest?* fmls)
       (formals-rest? L9 fmls))
     (define (extend-env env start ids)
