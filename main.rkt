@@ -1014,7 +1014,9 @@
               (set!-boxes (x.1) y.2)
               y.2)))))))
 
-(define-pass uncover-free : L4 (e) -> L5 ()
+(update-current-languages! L)
+
+(define-pass uncover-free : current-source (e) -> current-target ()
   (definitions
     (define-syntax-rule (formals->identifiers* formals)
       (formals->identifiers L5 formals)))
@@ -1229,7 +1231,9 @@
                                      (free () (#f)
                                            (#%variable-reference))))))))
 
-(define-pass raise-toplevel-variables : L5 (e) -> L6 ()
+(update-current-languages! L)
+
+(define-pass raise-toplevel-variables : current-source (e) -> current-target ()
   [CompilationTop : compilation-top (e [globals '()]) -> compilation-top ()
                   [(program (,binding ...) ,top-level-form)
                    `(program (,binding ...) ,(TopLevelForm top-level-form binding))]]
@@ -1323,7 +1327,9 @@
                            (set!-boxes (y.1) (#%plain-app (primitive +) (#%unbox y.1) '1))
                            (#%plain-app (primitive +) (#%top . x) (#%unbox y.1))))))))))
 
-(define-pass closurify-letrec : L6 (e) -> L7 ()
+(update-current-languages! L)
+
+(define-pass closurify-letrec : current-source (e) -> current-target ()
   (definitions
     (define (remove-index l index)
       (append (take l index) (drop l (+ 1 index)))))
@@ -1367,7 +1373,9 @@
      `(program () (let ([f.1 (closure f.1 (#%plain-lambda (x.2) (free () () x.2)))])
                     (#%plain-app f.1 '12))))))
 
-(define-pass void-lets : L7 (e) -> L8 ()
+(update-current-languages! L)
+
+(define-pass void-lets : current-source (e) -> current-target ()
   (Expr : expr (e) -> expr ()
         [(letrec ([,id ,[lambda]] ...)
            ,[expr])
@@ -1427,7 +1435,9 @@
                                               (set!-boxes (x.1) '6)
                                               (#%plain-app (primitive +) (#%unbox x.1) y.2))))))))))
 
-(define-pass debruijn-indices : L8 (e) -> L9 ()
+(update-current-languages! L)
+
+(define-pass debruijn-indices : current-source (e) -> current-target ()
   (definitions
     (define-syntax-rule (formals->identifiers* fmls)
       (formals->identifiers L8 fmls))
@@ -1577,7 +1587,9 @@
                       (#%plain-lambda 1 #f (0) (0)
                                       (begin 1 (#%top 0 0)))))))))
 
-(define-pass find-let-depth : L9 (e) -> L10 ()
+(update-current-languages! L)
+
+(define-pass find-let-depth : current-source (e) -> current-target ()
   (Lambda : lambda (e) -> lambda (0)
           [(#%plain-lambda ,eni1 ,boolean (,[binding2] ...) (,[binding3] ...) ,[expr depth])
            (define depth* (+ eni1 (length binding2) depth))
@@ -1694,7 +1706,9 @@
 (define tmp-prefix
   (zo:prefix 0 '() '() 'missing))
 
-(define-pass generate-zo-structs : L10 (e) -> * ()
+(update-current-languages! L)
+
+(define-pass generate-zo-structs : current-source (e) -> * ()
   (definitions
     (define zo-void
       (zo:primval 35)))
