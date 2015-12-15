@@ -725,13 +725,13 @@
     (check-equal?
      (compile/2 #'(module foo racket/base
                     (#%plain-module-begin
-                    (module bar racket/base
-                      (#%plain-module-begin
-                       12))
-                    (define x 5)
-                    (module* baz racket/base
-                      (#%plain-module-begin
-                       1)))))
+                     (module bar racket/base
+                       (#%plain-module-begin
+                        12))
+                     (define x 5)
+                     (module* baz racket/base
+                       (#%plain-module-begin
+                        1)))))
      `(module foo racket/base
         ((#%plain-app void)
          (define-values (x) '5)
@@ -739,7 +739,46 @@
         ((module bar racket/base
            ('12) () ()))
         ((module baz racket/base
-           ('1) () ()))))))
+           ('1) () ()))))
+    (check-equal?
+     (compile/2 #'(module foo racket/base
+                    (#%plain-module-begin
+                     (begin
+                       (module bar racket/base
+                         (#%plain-module-begin
+                          5))
+                       (module baz racket/base
+                         (#%plain-module-begin
+                          6))
+                       (define x 5))
+                     x)))
+     `(module foo racket/base
+        ((#%plain-app void)
+         (#%plain-app void)
+         (define-values (x) '5)
+         x)
+        ((module bar racket/base
+           ('5) () ())
+         (module baz racket/base
+           ('6) () ()))
+        ()))
+    (check-equal?
+     (compile/2 #'(module foo racket/base
+                    (#%plain-module-begin
+                     (module bar racket/base
+                       (#%plain-module-begin
+                        (module baz racket/base
+                          (#%plain-module-begin
+                           42)))))))
+     `(module foo racket/base
+        ((#%plain-app void))
+        ((module bar racket/base
+           ((#%plain-app void))
+           ((module baz racket/base
+              ('42)
+              () ()))
+           ()))
+         ()))))
 
 (update-current-languages! L)
 
