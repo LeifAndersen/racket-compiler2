@@ -1,8 +1,7 @@
 #lang racket/base
 
-(require nanopass/base
-         ;(except-in nanopass/base define-pass)
-         ;(rename-in nanopass/base [define-pass nanopass:define-pass])
+(require (except-in nanopass/base define-pass)
+         (rename-in nanopass/base [define-pass nanopass:define-pass])
          syntax/parse
          racket/match
          racket/set
@@ -446,6 +445,11 @@
 (define-syntax-parameter current-target-param #'current-target-top)
 (define-for-syntax current-language-number -1)
 
+(define-syntax (define-pass stx)
+  (syntax-parse stx
+    [(_ rest ...)
+     #'(nanopass:define-pass rest ...)]))
+
 ;; Parse and alpha-rename expanded program
 (define-pass parse-and-rename : * (form) -> current-target ()
   (definitions
@@ -608,7 +612,7 @@
                                ,(for/list ([i (in-list (syntax->list #'(body ...)))])
                                   (parse-expr i env)) ...)]
                 [(#%top . id:id)
-                 `(#%top . ,(parse-expr #'id env))]
+                 `(#%top . ,(syntax->datum #'id))]
                 [(#%variable-reference id:id)
                  `(#%variable-reference ,(parse-expr #'id env))]
                 [(#%variable-reference (#%top . id:id))
@@ -1932,6 +1936,10 @@
            (compile-compare #'(eval '(+ 1 2)
                                     (variable-reference->namespace
                                      (#%variable-reference))))
+           (compile-compare #'(begin
+                                (define x 5)
+                                (let ([x 6])
+                                  (#%top . x))))
            (compile-compare #'(call-with-current-continuation (lambda (x) 5)))
            (compile-compare #'(begin
                                 (module foo racket
