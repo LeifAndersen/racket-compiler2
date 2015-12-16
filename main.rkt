@@ -1,7 +1,11 @@
 #lang racket/base
 
-(require (except-in nanopass/base define-pass)
-         (rename-in nanopass/base [define-pass nanopass:define-pass])
+(require (except-in nanopass/base
+                    define-language
+                    define-pass)
+         (rename-in nanopass/base
+                    [define-language nanopass:define-language]
+                    [define-pass nanopass:define-pass])
          syntax/parse
          racket/match
          racket/set
@@ -120,274 +124,6 @@
       (with-input-from-bytes zo
         (lambda () (read))))))
 
-; Defines a list of languages for nanopass, starting with Lsrc, then L1, L2, etc.
-(define-syntax (define-languages stx)
-  (syntax-parse stx
-    [(_ name:id ((~datum language) src ...) ((~datum language) rest ...) ...)
-     #:with Lsrc (format-id stx "~asrc" #'name)
-     (define rlist (syntax->list #'((rest ...) ...)))
-     #`(begin
-         (define-language Lsrc src ...)
-         #,@(for/list ([lang (in-list rlist)]
-                       [i (in-range (length rlist))])
-              (define Li (if (= i 0)
-                             (format-id stx "~asrc" #'name)
-                             (format-id stx "~a~a" #'name i)))
-              (define Li+1 (format-id stx "L~a" (+ i 1)))
-              #`(define-language #,Li+1 (extends #,Li) #,@lang)))]))
-
-(define-languages L
-  (language
-   (terminals
-    (raw-require-spec (raw-require-spec))
-    (raw-provide-spec (raw-provide-spec))
-    (maybe-module-path (maybe-module-path module-path))
-    (declaration-keyword (declaration-keyword))
-    (datum (datum))
-    (id (id))
-    (false (false)))
-   (top-level-form (top-level-form)
-                   general-top-level-form
-                   (#%expression expr)
-                   (module id module-path
-                     (module-level-form ...))
-                   (begin* top-level-form ...)
-                   (begin-for-syntax* top-level-form ...))
-   (module-level-form (module-level-form)
-                      general-top-level-form
-                      (#%provide raw-provide-spec ...)
-                      (begin-for-syntax module-level-form ...)
-                      submodule-form
-                      (#%declare declaration-keyword ...))
-   (submodule-form (submodule-form)
-                   (submodule id module-path
-                              (module-level-form ...))
-                   (submodule* id module-path
-                               (module-level-form ...))
-                   (submodule* id
-                               (module-level-form ...)))
-   (general-top-level-form (general-top-level-form)
-                           expr
-                           (define-values (id ...) expr)
-                           (define-syntaxes (id ...) expr)
-                           (#%require raw-require-spec ...))
-   (expr (expr)
-         id
-         (primitive id)
-         (#%plain-lambda formals expr* ... expr)
-         (case-lambda (formals expr* ... expr) ...)
-         (if expr1 expr2 expr3)
-         (begin expr* ... expr)
-         (begin0 expr* ... expr)
-         (let-values ([(id ...) expr1] ...)
-           expr* ... expr)
-         (letrec-values ([(id ...) expr1] ...)
-           expr* ... expr)
-         (set! id expr)
-         (quote datum)
-         (quote-syntax datum)
-         (with-continuation-mark expr1 expr2 expr3)
-         (#%plain-app expr expr* ...)
-         (#%top . id)
-         (#%variable-reference id)
-         (#%variable-reference-top id)
-         (#%variable-reference))
-   (formals (formals)
-            id
-            (id ...)
-            (id id* ... . id2)))
-
-  (language
-   (top-level-form (top-level-form)
-                   (- (module id module-path
-                        (module-level-form ...)))
-                   (+ submodule-form))
-   (module-level-form (module-level-form)
-                      (- submodule-form))
-   (submodule-form (submodule-form)
-                   (- (submodule id module-path
-                                 (module-level-form ...))
-                      (submodule* id module-path
-                                  (module-level-form ...))
-                      (submodule* id
-                                  (module-level-form ...)))
-                   (+ (module id module-path
-                        (module-level-form ...)
-                        (submodule-form ...)
-                        (submodule-form* ...)))))
-
-  (language
-   (lambda (lambda)
-     (+ (#%plain-lambda formals expr)))
-   (expr (expr)
-         (- (#%plain-lambda formals expr* ... expr)
-            (case-lambda (formals expr* ... expr) ...)
-            (let-values ([(id ...) expr1] ...)
-              expr* ... expr)
-            (letrec-values ([(id ...) expr1] ...)
-              expr* ... expr))
-         (+ lambda
-            (case-lambda lambda ...)
-            (let-values ([(id ...) expr1] ...)
-              expr)
-            (letrec-values ([(id ...) expr1] ...)
-              expr))))
-
-  (language
-   (lambda (lambda)
-     (- (#%plain-lambda formals expr))
-     (+ (#%plain-lambda formals abody)))
-   (expr (expr)
-         (- (let-values ([(id ...) expr1] ...)
-              expr)
-            (letrec-values ([(id ...) expr1] ...)
-              expr))
-         (+ (let-values ([(id ...) expr1] ...)
-              abody)
-            (letrec-values ([(id ...) expr1] ...)
-              abody)))
-   (assigned-body (abody)
-                  (+ (assigned (id ...) expr))))
-
-  (language
-   (expr (expr)
-         (- (let-values ([(id ...) expr1] ...)
-              abody)
-            (letrec-values ([(id ...) expr1] ...)
-              abody)
-            (set! id expr))
-         (+ (undefined)
-            (let ([id expr1] ...)
-              set-abody)
-            (letrec ([id lambda] ...)
-              expr)
-            (set!-values (id ...) expr)))
-   (set-abody (set-abody)
-              (+ (begin-set! expr ... abody))))
-
-  (language
-   (expr (expr)
-         (- (let ([id expr1] ...)
-              set-abody))
-         (+ (let ([id expr1] ...)
-              expr)
-            (#%unbox id)
-            (#%box id)
-            (set!-boxes (id ...) expr)))
-   (lambda (lambda)
-     (- (#%plain-lambda formals abody))
-     (+ (#%plain-lambda formals expr)))
-   (set-abody (set-abody)
-              (- (begin-set! expr ... abody)))
-   (assigned-body (abody)
-                  (- (assigned (id ...) expr))))
-
-  (language
-   (entry compilation-top)
-   (compilation-top (compilation-top)
-                    (+ (program (binding ...) top-level-form)))
-   (submodule-form (submodule-form)
-                   (- (module id module-path
-                        (module-level-form ...)
-                        (submodule-form ...)
-                        (submodule-form* ...)))
-                   (+ (module id module-path (id* ...)
-                              (module-level-form ...)
-                              (submodule-form ...)
-                              (submodule-form* ...))))
-   (lambda (lambda)
-     (- (#%plain-lambda formals expr))
-     (+ (#%plain-lambda formals fbody)))
-   (binding (binding)
-            (+ id
-               false))
-   (free-body (fbody)
-              (+ (free (id ...) (binding* ...) expr))))
-
-  (language
-   (expr (expr)
-         (+ (set!-global id expr))))
-
-  (language
-   (expr (expr)
-         (+ (closure id lambda))))
-
-  (language
-   (expr (expr)
-         (- (let ([id expr1] ...) expr)
-            (undefined))
-         (+ (let ([id expr1]) expr)
-            (let-void (id ...) expr))))
-
-  (language
-   (terminals
-    (+ (exact-nonnegative-integer (exact-nonnegative-integer eni))
-       (boolean (boolean))))
-   (expr (expr)
-         (- id
-            (primitive id)
-            (let-void (id ...) expr)
-            (let ([id expr1]) expr)
-            (letrec ([id lambda] ...)
-              expr)
-            (set!-boxes (id ...) expr)
-            (set!-values (id ...) expr)
-            (set!-global id expr)
-            (#%box id)
-            (#%unbox id)
-            (#%top . id)
-            (#%variable-reference)
-            (#%variable-reference id)
-            (#%variable-reference-top id))
-         (+ binding
-            (primitive eni)
-            (let-void eni expr)
-            (let-one expr1 expr)
-            (letrec (lambda ...)
-              expr)
-            (set!-boxes eni1 eni2 expr)
-            (set!-values eni1 eni2 expr)
-            (set!-global eni1 eni2 expr)
-            (#%box eni)
-            (#%unbox eni)
-            (#%top eni1 eni2)
-            (#%variable-reference-none eni1 eni2)
-            (#%variable-reference eni)
-            (#%variable-reference-top eni)))
-   (general-top-level-form (general-top-level-form)
-                           (- (define-values (id ...) expr))
-                           (+ (define-values (eni ...) expr)))
-   (lambda (lambda)
-     (- (#%plain-lambda formals fbody))
-     (+ (#%plain-lambda eni1 boolean (binding2 ...) (binding3 ...) expr)))
-   (binding (binding)
-            (+ eni
-               (primitive eni)))
-   (formals (formals)
-            (- id
-               (id ...)
-               (id id* ... . id2)))
-   (free-body (fbody)
-              (- (free (id ...) (binding* ...) expr))))
-
-  (language
-   (entry compilation-top)
-   (compilation-top (compilation-top)
-                    (- (program (binding ...) top-level-form))
-                    (+ (program eni (binding ...) top-level-form)))
-   (submodule-form (submodule-form)
-                   (- (module id module-path (id* ...)
-                              (module-level-form ...)
-                              (submodule-form ...)
-                              (submodule-form* ...)))
-                   (+ (module id module-path (id* ...) eni
-                              (module-level-form ...)
-                              (submodule-form ...)
-                              (submodule-form* ...))))
-   (lambda (lambda)
-     (- (#%plain-lambda eni1 boolean (binding2 ...) (binding3 ...) expr))
-     (+ (#%plain-lambda eni1 boolean (binding2 ...) (binding3 ...) eni4 expr)))))
-
 ; Grabs set of identifiers out of formals non-terminal in a language
 ; lang formals -> (listof identifiers)
 (define-syntax-rule (formals->identifiers lang fmls)
@@ -447,6 +183,24 @@
 (define-syntax current-target-top (language-box #'Lsrc))
 (define-for-syntax current-language-number -1)
 
+(define-syntax (define-language stx)
+  (syntax-parse stx
+    [(_ name:id rest ...)
+     #:with current-source (format-id stx "current-source")
+     #:with current-target (format-id stx "current-target")
+     #`(splicing-let-syntax ([current-source (syntax-local-value #'current-source-top (lambda () #f))]
+                             [current-target (syntax-local-value #'current-target-top (lambda () #f))])
+         #,(cond [(free-identifier=? #'name #'current-target)
+                  (define-values (val trans) (syntax-local-value/immediate #'current-target-top))
+                  (with-syntax ([new-name (format-id stx "~a" trans)])
+                    #'(nanopass:define-language new-name rest ...))]
+                 [(free-identifier=? #'name #'current-source)
+                  (define-values (val trans) (syntax-local-value/immediate #'current-source-top))
+                  (with-syntax ([new-name (format-id stx "~a" trans)])
+                    #'(nanopass:define-language new-name rest ...))]
+                 [else
+                  #'(nanopass:define-language name rest ...)]))]))
+
 (define-syntax (define-pass stx)
   (syntax-parse stx
     [(_ rest ...)
@@ -455,6 +209,66 @@
      #'(splicing-let-syntax ([current-source (syntax-local-value #'current-source-top (lambda () #f))]
                              [current-target (syntax-local-value #'current-target-top (lambda () #f))])
          (nanopass:define-pass rest ...))]))
+
+(define-language current-target
+  (terminals
+   (raw-require-spec (raw-require-spec))
+   (raw-provide-spec (raw-provide-spec))
+   (maybe-module-path (maybe-module-path module-path))
+   (declaration-keyword (declaration-keyword))
+   (datum (datum))
+   (id (id))
+   (false (false)))
+  (top-level-form (top-level-form)
+                  general-top-level-form
+                  (#%expression expr)
+                  (module id module-path
+                    (module-level-form ...))
+                  (begin* top-level-form ...)
+                  (begin-for-syntax* top-level-form ...))
+  (module-level-form (module-level-form)
+                     general-top-level-form
+                     (#%provide raw-provide-spec ...)
+                     (begin-for-syntax module-level-form ...)
+                     submodule-form
+                     (#%declare declaration-keyword ...))
+  (submodule-form (submodule-form)
+                  (submodule id module-path
+                             (module-level-form ...))
+                  (submodule* id module-path
+                              (module-level-form ...))
+                  (submodule* id
+                              (module-level-form ...)))
+  (general-top-level-form (general-top-level-form)
+                          expr
+                          (define-values (id ...) expr)
+                          (define-syntaxes (id ...) expr)
+                          (#%require raw-require-spec ...))
+  (expr (expr)
+        id
+        (primitive id)
+        (#%plain-lambda formals expr* ... expr)
+        (case-lambda (formals expr* ... expr) ...)
+        (if expr1 expr2 expr3)
+        (begin expr* ... expr)
+        (begin0 expr* ... expr)
+        (let-values ([(id ...) expr1] ...)
+          expr* ... expr)
+        (letrec-values ([(id ...) expr1] ...)
+          expr* ... expr)
+        (set! id expr)
+        (quote datum)
+        (quote-syntax datum)
+        (with-continuation-mark expr1 expr2 expr3)
+        (#%plain-app expr expr* ...)
+        (#%top . id)
+        (#%variable-reference id)
+        (#%variable-reference-top id)
+        (#%variable-reference))
+  (formals (formals)
+           id
+           (id ...)
+           (id id* ... . id2)))
 
 ;; Parse and alpha-rename expanded program
 (define-pass parse-and-rename : * (form) -> current-target ()
@@ -677,6 +491,26 @@
 
 (update-current-languages! L)
 
+(define-language current-target
+  (extends current-source)
+  (top-level-form (top-level-form)
+                  (- (module id module-path
+                       (module-level-form ...)))
+                  (+ submodule-form))
+  (module-level-form (module-level-form)
+                     (- submodule-form))
+  (submodule-form (submodule-form)
+                  (- (submodule id module-path
+                                (module-level-form ...))
+                     (submodule* id module-path
+                                 (module-level-form ...))
+                     (submodule* id
+                                 (module-level-form ...)))
+                  (+ (module id module-path
+                       (module-level-form ...)
+                       (submodule-form ...)
+                       (submodule-form* ...)))))
+
 (define-pass lift-submodules : current-source (e) -> current-target ()
   (TopLevelForm : top-level-form (e) -> top-level-form ()
                 [(module ,id ,module-path
@@ -782,6 +616,24 @@
 
 (update-current-languages! L)
 
+(define-language current-target
+  (extends current-source)
+  (lambda (lambda)
+    (+ (#%plain-lambda formals expr)))
+  (expr (expr)
+        (- (#%plain-lambda formals expr* ... expr)
+           (case-lambda (formals expr* ... expr) ...)
+           (let-values ([(id ...) expr1] ...)
+             expr* ... expr)
+           (letrec-values ([(id ...) expr1] ...)
+             expr* ... expr))
+        (+ lambda
+           (case-lambda lambda ...)
+           (let-values ([(id ...) expr1] ...)
+             expr)
+           (letrec-values ([(id ...) expr1] ...)
+             expr))))
+
 (define-pass make-begin-explicit : current-source (e) -> current-target ()
   (Expr : expr (e) -> expr ()
         [(#%plain-lambda ,[formals] ,[expr*] ... ,[expr])
@@ -839,6 +691,23 @@
           f.1)))))
 
 (update-current-languages! L)
+
+(define-language current-target
+  (extends current-source)
+   (lambda (lambda)
+     (- (#%plain-lambda formals expr))
+     (+ (#%plain-lambda formals abody)))
+   (expr (expr)
+         (- (let-values ([(id ...) expr1] ...)
+              expr)
+            (letrec-values ([(id ...) expr1] ...)
+              expr))
+         (+ (let-values ([(id ...) expr1] ...)
+              abody)
+            (letrec-values ([(id ...) expr1] ...)
+              abody)))
+   (assigned-body (abody)
+                  (+ (assigned (id ...) expr))))
 
 (define-pass identify-assigned-variables : current-source (e) -> current-target ()
   (definitions
@@ -942,6 +811,23 @@
                                                 x.1)))))))
 
 (update-current-languages! L)
+
+(define-language current-target
+  (extends current-source)
+  (expr (expr)
+        (- (let-values ([(id ...) expr1] ...)
+             abody)
+           (letrec-values ([(id ...) expr1] ...)
+             abody)
+           (set! id expr))
+        (+ (undefined)
+           (let ([id expr1] ...)
+             set-abody)
+           (letrec ([id lambda] ...)
+             expr)
+           (set!-values (id ...) expr)))
+  (set-abody (set-abody)
+             (+ (begin-set! expr ... abody))))
 
 (define-pass purify-letrec : current-source (e) -> current-target ()
   (Expr : expr (e) -> expr ()
@@ -1049,6 +935,24 @@
 
 (update-current-languages! L)
 
+(define-language current-target
+  (extends current-source)
+  (expr (expr)
+        (- (let ([id expr1] ...)
+             set-abody))
+        (+ (let ([id expr1] ...)
+             expr)
+           (#%unbox id)
+           (#%box id)
+           (set!-boxes (id ...) expr)))
+  (lambda (lambda)
+    (- (#%plain-lambda formals abody))
+    (+ (#%plain-lambda formals expr)))
+  (set-abody (set-abody)
+             (- (begin-set! expr ... abody)))
+  (assigned-body (abody)
+                 (- (assigned (id ...) expr))))
+
 (define-pass convert-assignments : current-source (e) -> current-target ()
   (definitions
     (define ((lookup-env env) x)
@@ -1152,6 +1056,29 @@
               y.2)))))))
 
 (update-current-languages! L)
+
+(define-language current-target
+  (extends current-source)
+  (entry compilation-top)
+  (compilation-top (compilation-top)
+                   (+ (program (binding ...) top-level-form)))
+  (submodule-form (submodule-form)
+                  (- (module id module-path
+                       (module-level-form ...)
+                       (submodule-form ...)
+                       (submodule-form* ...)))
+                  (+ (module id module-path (id* ...)
+                             (module-level-form ...)
+                             (submodule-form ...)
+                             (submodule-form* ...))))
+  (lambda (lambda)
+    (- (#%plain-lambda formals expr))
+    (+ (#%plain-lambda formals fbody)))
+  (binding (binding)
+           (+ id
+              false))
+  (free-body (fbody)
+             (+ (free (id ...) (binding* ...) expr))))
 
 (define-pass uncover-free : current-source (e) -> current-target ()
   (definitions
@@ -1360,6 +1287,11 @@
 
 (update-current-languages! L)
 
+(define-language current-target
+  (extends current-source)
+  (expr (expr)
+        (+ (set!-global id expr))))
+
 (define-pass raise-toplevel-variables : current-source (e) -> current-target ()
   [CompilationTop : compilation-top (e [globals '()]) -> compilation-top ()
                   [(program (,binding ...) ,top-level-form)
@@ -1447,6 +1379,11 @@
 
 (update-current-languages! L)
 
+(define-language current-target
+  (extends current-source)
+  (expr (expr)
+        (+ (closure id lambda))))
+
 (define-pass closurify-letrec : current-source (e) -> current-target ()
   (definitions
     (define (remove-index l index)
@@ -1492,6 +1429,14 @@
                     (#%plain-app f.1 '12))))))
 
 (update-current-languages! L)
+
+(define-language current-target
+  (extends current-source)
+  (expr (expr)
+        (- (let ([id expr1] ...) expr)
+           (undefined))
+        (+ (let ([id expr1]) expr)
+           (let-void (id ...) expr))))
 
 (define-pass void-lets : current-source (e) -> current-target ()
   (Expr : expr (e) -> expr ()
@@ -1554,6 +1499,58 @@
                                               (#%plain-app (primitive +) (#%unbox x.1) y.2))))))))))
 
 (update-current-languages! L)
+
+(define-language current-target
+  (extends current-source)
+  (terminals
+   (+ (exact-nonnegative-integer (exact-nonnegative-integer eni))
+      (boolean (boolean))))
+  (expr (expr)
+        (- id
+           (primitive id)
+           (let-void (id ...) expr)
+           (let ([id expr1]) expr)
+           (letrec ([id lambda] ...)
+             expr)
+           (set!-boxes (id ...) expr)
+           (set!-values (id ...) expr)
+           (set!-global id expr)
+           (#%box id)
+           (#%unbox id)
+           (#%top . id)
+           (#%variable-reference)
+           (#%variable-reference id)
+           (#%variable-reference-top id))
+        (+ binding
+           (primitive eni)
+           (let-void eni expr)
+           (let-one expr1 expr)
+           (letrec (lambda ...)
+             expr)
+           (set!-boxes eni1 eni2 expr)
+           (set!-values eni1 eni2 expr)
+           (set!-global eni1 eni2 expr)
+           (#%box eni)
+           (#%unbox eni)
+           (#%top eni1 eni2)
+           (#%variable-reference-none eni1 eni2)
+           (#%variable-reference eni)
+           (#%variable-reference-top eni)))
+  (general-top-level-form (general-top-level-form)
+                          (- (define-values (id ...) expr))
+                          (+ (define-values (eni ...) expr)))
+  (lambda (lambda)
+    (- (#%plain-lambda formals fbody))
+    (+ (#%plain-lambda eni1 boolean (binding2 ...) (binding3 ...) expr)))
+  (binding (binding)
+           (+ eni
+              (primitive eni)))
+  (formals (formals)
+           (- id
+              (id ...)
+              (id id* ... . id2)))
+  (free-body (fbody)
+             (- (free (id ...) (binding* ...) expr))))
 
 (define-pass debruijn-indices : current-source (e) -> current-target ()
   (definitions
@@ -1694,6 +1691,25 @@
                                       (begin 1 (#%top 0 0)))))))))
 
 (update-current-languages! L)
+
+(define-language current-target
+  (extends current-source)
+  (entry compilation-top)
+  (compilation-top (compilation-top)
+                   (- (program (binding ...) top-level-form))
+                   (+ (program eni (binding ...) top-level-form)))
+  (submodule-form (submodule-form)
+                  (- (module id module-path (id* ...)
+                             (module-level-form ...)
+                             (submodule-form ...)
+                             (submodule-form* ...)))
+                  (+ (module id module-path (id* ...) eni
+                             (module-level-form ...)
+                             (submodule-form ...)
+                             (submodule-form* ...))))
+  (lambda (lambda)
+    (- (#%plain-lambda eni1 boolean (binding2 ...) (binding3 ...) expr))
+    (+ (#%plain-lambda eni1 boolean (binding2 ...) (binding3 ...) eni4 expr))))
 
 (define-pass find-let-depth : current-source (e) -> current-target ()
   (Lambda : lambda (e) -> lambda (0)
