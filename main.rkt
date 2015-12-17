@@ -341,7 +341,7 @@
                [(define-values (id:id ...) body)
                 ;(define env* (extend-env env (syntax->list #'(id ...))))
                 `(define-values (,(for/list ([i (in-list (syntax->list #'(id ...)))])
-                                   (parse-expr i env)) ...)
+                                    (parse-expr i env)) ...)
                    ,(parse-expr #'body env))]
                [(define-syntaxes (id:id ...) body)
                 ;(define env* (extend-env env (syntax->list #'(id ...))))
@@ -484,6 +484,19 @@
          (submodule pre racket
                     ((#%plain-app (primitive +) '5 '6))))))
     (check-equal?
+     (compile/1 #'(begin-for-syntax
+                    (define x 5)))
+     `(begin-for-syntax*
+        (define-values (x) '5)))
+    (check-equal?
+     (compile/1 #'(module test racket
+                    (#%plain-module-begin
+                     (begin-for-syntax
+                       (define x 5)))))
+     `(module test racket
+        ((begin-for-syntax
+           (define-values (x) '5)))))
+    (check-equal?
      (compile/1 #'(lambda (a b . c)
                     (apply + a b c)))
      `(#%expression (#%plain-lambda (a.1 b.3 . c.2)
@@ -574,6 +587,21 @@
            ('12) () ()))
         ((module baz racket/base
            ('1) () ()))))
+    (check-equal?
+     (compile/2 #'(module outer racket
+                    (#%plain-module-begin
+                     (begin-for-syntax
+                       (define x 6)
+                       (module* test #f
+                         (#%plain-module-begin
+                          x))))))
+     `(module outer racket
+        ((begin-for-syntax
+           (define-values (x) '6)
+           (#%plain-app void)))
+        ()
+        ((module test #f
+           (x) () ()))))
     (check-equal?
      (compile/2 #'(module foo racket/base
                     (#%plain-module-begin
@@ -1943,6 +1971,7 @@
            (compile-compare #'((lambda (x) x) 42))
            (compile-compare #'((lambda (x) (+ x 5)) 84))
            (compile-compare #'(((lambda (x) (lambda (y) (+ x y))) 2) 3))
+           (compile-compare #'((lambda x (car x)) '(84 91 514)))
            (compile-compare #'(let ([x (lambda () 42)])
                                 (x)))
            (compile-compare #'(let ([x 5])
