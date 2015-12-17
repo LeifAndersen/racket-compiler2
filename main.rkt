@@ -37,7 +37,7 @@
     (values v k)))
 
 (define (maybe-module-path? m)
-  (or (module-path? m) #f))
+  (or (module-path? m) (not m)))
 
 (define (raw-provide-spec? rps)
   #t)
@@ -299,7 +299,7 @@
                             (parse-top i env)) ...)]
                [(begin-for-syntax body ...)
                 `(begin-for-syntax* ,(for/list ([i (in-list (syntax->list #'(body ...)))])
-                                       (parse-top i env)) ...)]
+                                       (parse-top (syntax-shift-phase-level i -1) env)) ...)]
                [else
                 (parse-gen #'else env)]))
 
@@ -311,7 +311,7 @@
                 `(#%provide ,(syntax->list #'(spec ...)) ...)]
                [(begin-for-syntax body ...)
                 `(begin-for-syntax ,(for/list ([i (in-list (syntax->list #'(body ...)))])
-                                      (parse-mod i env)) ...)]
+                                      (parse-mod (syntax-shift-phase-level i -1) env)) ...)]
                [(#%declare keyword ...)
                 `(#%declare ,(syntax->list #'(keyword ...)) ...)]
                [(module id:id path
@@ -530,42 +530,43 @@
                    (,[module-level-form pre post] ...))
                  `(module ,id ,module-path
                     (,module-level-form ...)
-                    (,(remove* '(#f) pre) ...)
-                    (,(remove* '(#f) post) ...))])
-  (SubmoduleForm : submodule-form (e) -> module-level-form (#f #f)
+                    (,(append* pre) ...)
+                    (,(append* post) ...))])
+  (SubmoduleForm : submodule-form (e) -> module-level-form ('() '())
                  [(submodule ,id ,module-path
                              (,[module-level-form pre post] ...))
                   (values `(#%plain-app void)
-                          (with-output-language (L1 submodule-form)
-                            `(module ,id ,module-path
-                               (,module-level-form ...)
-                               (,(remove* '(#f) pre) ...)
-                               (,(remove* '(#f) post) ...)))
-                          #f)]
+                          (list (with-output-language (L1 submodule-form)
+                                  `(module ,id ,module-path
+                                     (,module-level-form ...)
+                                     (,(append* pre) ...)
+                                     (,(append* post) ...))))
+                          null)]
                  [(submodule* ,id ,module-path
                               (,[module-level-form pre post] ...))
                   (values `(#%plain-app void)
-                          #f
-                          (with-output-language (L1 submodule-form)
-                            `(module ,id ,module-path
-                               (,module-level-form ...)
-                               (,(remove* '(#f) pre) ...)
-                               (,(remove* '(#f) post) ...))))]
+                          null
+                          (list (with-output-language (L1 submodule-form)
+                                  `(module ,id ,module-path
+                                     (,module-level-form ...)
+                                     (,(append* pre) ...)
+                                     (,(append* post) ...)))))]
                  [(submodule* ,id
                               (,[module-level-form pre post] ...))
                   (values `(#%plain-app void)
-                          #f
-                          (with-output-language (L1 submodule-form)
-                            `(module ,id #f
-                               (,module-level-form ...)
-                               (,(remove* '(#f) pre) ...)
-                               (,(remove* '(#f) post) ...))))])
+                          null
+                          (list (with-output-language (L1 submodule-form)
+                                  `(module ,id #f
+                                     (,module-level-form ...)
+                                     (,(append* pre) ...)
+                                     (,(append* post) ...)))))])
   (ModuleLevelForm : module-level-form (e) -> module-level-form (#f #f)
                    [(begin-for-syntax ,[module-level-form pre post] ...)
                     (values `(begin-for-syntax ,module-level-form ...)
-                            pre post)])
-  (GeneralTopLevelForm : general-top-level-form (e) -> general-top-level-form (#f #f))
-  (Expr : expr (e) -> expr (#f #f)))
+                            (append* pre)
+                            (append* post))])
+  (GeneralTopLevelForm : general-top-level-form (e) -> general-top-level-form ('() '()))
+  (Expr : expr (e) -> expr ('() '())))
 
 (module+ test
   (define-compiler-test L1 top-level-form
