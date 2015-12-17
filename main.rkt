@@ -1994,6 +1994,7 @@
                                   3))
            (compile-compare #'(let ([+ 12])
                                 (- + 8)))
+           (compile-compare #'(begin0 12 42 (+ 3 8)))
            (compile-compare #'(begin
                                 (define x 5)
                                 x))
