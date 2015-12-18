@@ -132,8 +132,7 @@
   (define current-compile-top (list-ref compilers current-compile-number))
   (define (update-current-compile!)
     (set! current-compile-number (+ current-compile-number 1))
-    (set! current-compile-top (list-ref compilers current-compile-number))
-    current-compile-top))
+    (set! current-compile-top (list-ref compilers current-compile-number))))
 
 ; Grabs set of identifiers out of formals non-terminal in a language
 ; lang formals -> (listof identifiers)
