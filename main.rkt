@@ -39,11 +39,8 @@
 (define (maybe-module-path? m)
   (or (module-path? m) (not m)))
 
-(define (raw-provide-spec? rps)
-  #t)
-
-(define (raw-require-spec? rrs)
-  #t)
+(define (phase-level? pl)
+  (or (exact-nonnegative-integer? pl) (not pl)))
 
 (define (declaration-keyword? dk)
   #t)
@@ -221,14 +218,17 @@
                              [current-target (syntax-local-value #'current-target-top (lambda () #f))])
          (nanopass:define-pass rest ...))]))
 
+;; ===================================================================================================
+
 (define-language current-target
   (terminals
-   (raw-require-spec (raw-require-spec))
-   (raw-provide-spec (raw-provide-spec))
    (maybe-module-path (maybe-module-path module-path))
    (declaration-keyword (declaration-keyword))
    (datum (datum))
    (id (id))
+   (string (string))
+   (path (path))
+   (phase-level (phase-level))
    (false (false)))
   (top-level-form (top-level-form)
                   general-top-level-form
@@ -279,7 +279,46 @@
   (formals (formals)
            id
            (id ...)
-           (id id* ... . id2)))
+           (id id* ... . id2))
+  (raw-require-spec (raw-require-spec)
+                    phaseless-req-spec
+                    (for-meta phase-level phaseless-req-spec ...)
+                    (for-syntax phaseless-req-spec ...)
+                    (for-template phaseless-req-spec ...)
+                    (for-label phaseless-prov-spec ...)
+                    (just-meta phase-level raw-require-spec ...))
+  (phaseless-req-spec (phaseless-req-spec)
+                      (only raw-module-path id ...)
+                      (all-except raw-module-path id ...)
+                      (prefix-all-except id raw-module-path id* ...)
+                      (rename raw-module-path id1 id2))
+  (raw-module-path (raw-module-path)
+                   raw-root-module-path
+                   (submod raw-root-module-path id ...))
+  (raw-root-module-path (raw-root-module-path)
+                        id
+                        string
+                        (quote id)
+                        (lib string ...)
+                        (file string)
+                        (planet string1
+                                (string2 string3 string* ...))
+                        path)
+  (raw-provide-spec (raw-provide-spec)
+                    phaseless-prov-spec
+                    (for-meta phase-level phaseless-prov-spec)
+                    (for-syntax phaseless-prov-spec)
+                    (for-label phaseless-prov-spec)
+                    (protect raw-provide-spec))
+  (phaseless-prov-spec (phaseless-prov-spec)
+                       id
+                       (rename id1 id2)
+                       (struct id (id* ...))
+                       (all-from-except raw-module-path id ...)
+                       (all-defined-except id ...)
+                       (prefix-all-defined-except id id* ...)
+                       (protect phaseless-prov-spec ...)
+                       (expand (id . datum))))
 
 ;; Parse and alpha-rename expanded program
 (define-pass parse-and-rename : * (form) -> current-target ()
@@ -515,6 +554,8 @@
        `(#%expression (#%plain-lambda (a.1 b.3 . c.2)
                                       (#%plain-app (primitive apply) (primitive +) a.1 b.3 c.2)))))))
 
+;; ===================================================================================================
+
 (update-current-languages! L)
 
 (define-language current-target
@@ -658,6 +699,8 @@
              ()))
           ())))))
 
+;; ===================================================================================================
+
 (update-current-languages! L)
 
 (define-language current-target
@@ -735,6 +778,8 @@
           (begin
             (#%plain-app (primitive display) '"Hello")
             f.1))))))
+
+;; ===================================================================================================
 
 (update-current-languages! L)
 
@@ -857,6 +902,8 @@
                                                 (begin
                                                   (set! x.1 '42)
                                                   x.1))))))))
+
+;; ===================================================================================================
 
 (update-current-languages! L)
 
@@ -986,6 +1033,8 @@
                         (set!-values (x.1) y.2)
                         y.2))))))))
 
+;; ===================================================================================================
+
 (update-current-languages! L)
 
 (define-language current-target
@@ -1109,6 +1158,8 @@
               (begin
                 (set!-boxes (x.1) y.2)
                 y.2))))))))
+
+;; ===================================================================================================
 
 (update-current-languages! L)
 
@@ -1342,6 +1393,8 @@
                                        (free () (#f)
                                              (#%variable-reference)))))))))
 
+;; ===================================================================================================
+
 (update-current-languages! L)
 
 (define-language current-target
@@ -1436,6 +1489,8 @@
                              (set!-boxes (y.1) (#%plain-app (primitive +) (#%unbox y.1) '1))
                              (#%plain-app (primitive +) (#%top . x) (#%unbox y.1)))))))))))
 
+;; ===================================================================================================
+
 (update-current-languages! L)
 
 (define-language current-target
@@ -1488,6 +1543,8 @@
                             (f 12)))
        `(program () (let ([f.1 (closure f.1 (#%plain-lambda (x.2) (free () () x.2)))])
                       (#%plain-app f.1 '12)))))))
+
+;; ===================================================================================================
 
 (update-current-languages! L)
 
@@ -1560,6 +1617,8 @@
                                               (begin
                                                 (set!-boxes (x.1) '6)
                                                 (#%plain-app (primitive +) (#%unbox x.1) y.2)))))))))))
+
+;; ===================================================================================================
 
 (update-current-languages! L)
 
@@ -1754,6 +1813,8 @@
                        (#%expression
                         (#%plain-lambda 1 #f (0) (0)
                                         (begin 1 (#%top 0 0))))))))))
+
+;; ===================================================================================================
 
 (update-current-languages! L)
 
@@ -2078,6 +2139,8 @@
                                 (require 'foo)
                                 x)))
          all-compiler-tests)))
+
+;; ===================================================================================================
 
 (define-syntax (define-compiler stx)
   (syntax-parse stx
