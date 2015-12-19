@@ -302,7 +302,7 @@
                         (planet string1
                                 (string2 string3 string* ...))
                         path)
-  (raw-provide-spec (raw-provide-spec rps)
+  (raw-provide-spec(raw-provide-spec rps)
                     phaseless-prov-spec
                     (for-meta* phase-level phaseless-prov-spec)
                     (protect raw-provide-spec))
@@ -875,19 +875,30 @@
   (TopLevelForm : top-level-form (e) -> top-level-form ()
                 [(#%require ,[raw-require-spec] ...)
                  `(#%require ,raw-require-spec ...)])
-  (GeneralTopLevelForm : general-top-level-form (e) -> general-top-level-form ('() '())
-                       [(#%require ,[raw-require-spec] ...)
+  (GeneralTopLevelForm : general-top-level-form (e [meta-level 0]) -> general-top-level-form ('() '())
+                       [(#%require ,raw-require-spec ...)
                         (values `(#%plain-app void)
                                 null
-                                raw-require-spec)])
-  (ModuleLevelForm : module-level-form (e) -> module-level-form ('() '())
-                   [(begin-for-syntax ,[module-level-form prov req] ...)
-                    (values `(begin-for-syntax ,module-level-form ...)
-                            (append* prov) ;; TODO, this is very wrong
-                            (append* req))]  ;; Should take into acount phase legvel
-                   [(#%provide ,[raw-provide-spec] ...)
+                                (for/list ([rrs (in-list raw-require-spec)])
+                                  (RawRequireSpec rrs meta-level)))])
+  (ModuleLevelForm : module-level-form (e [meta-level 0]) -> module-level-form ('() '())
+                   [(begin-for-syntax ,module-level-form ...)
+                    (define-values (mlf prov req) (for/fold ([mlfs '()]
+                                                             [prov '()]
+                                                             [req '()])
+                                                            ([mlf (in-list module-level-form)])
+                                                    (define-values (m p r)
+                                                      (ModuleLevelForm mlf (+ meta-level 1)))
+                                                    (values (cons m mlfs)
+                                                            (cons p prov)
+                                                            (cons r req))))
+                    (values `(begin-for-syntax ,(reverse mlf) ...)
+                            (append* (reverse prov))
+                            (append* (reverse req)))]
+                   [(#%provide ,raw-provide-spec ...)
                     (values `(#%plain-app void)
-                            raw-provide-spec
+                            (for/list ([rps (in-list raw-provide-spec)])
+                              (RawProvideSpec rps meta-level))
                             null)])
   (SubmoduleForm : submodule-form (e) -> submodule-form ()
                  [(module ,id ,module-path
@@ -900,7 +911,29 @@
                      (,module-level-form ...)
                      (,submodule-form ...)
                      (,submodule-form* ...))])
-  (Expr : expr (e) -> expr ('() '())))
+  (Expr : expr (e) -> expr ('() '()))
+  (RawRequireSpec : raw-require-spec (e [meta-level 0]) -> raw-require-spec ()
+                  [(for-meta ,phase-level ,[phaseless-req-spec] ...)
+                   (if (exact-integer? phase-level)
+                       `(for-meta ,(+ meta-level phase-level) ,phaseless-req-spec ...)
+                       `(for-meta #f ,phaseless-req-spec ...))]
+                  [(just-meta ,phase-level ,[raw-require-spec] ...)
+                   `(just-meta ,(+ meta-level phase-level) ,raw-require-spec ...)]
+                  [,phaseless-req-spec
+                   (if (= meta-level 0)
+                       (PhaselessReqSpec phaseless-req-spec)
+                       `(for-meta ,meta-level ,(PhaselessReqSpec phaseless-req-spec)))])
+  (RawProvideSpec : raw-provide-spec (e [meta-level 0]) -> raw-provide-spec ()
+                  [(for-meta* ,phase-level ,[phaseless-prov-spec])
+                   (if (exact-integer? phase-level)
+                       `(for-meta* ,(+ meta-level phase-level) ,phaseless-prov-spec)
+                       `(for-meta* #f ,phaseless-prov-spec))]
+                  [,phaseless-prov-spec
+                   (if (= meta-level 0)
+                       (PhaselessProvSpec phaseless-prov-spec)
+                       `(for-meta* ,meta-level ,(PhaselessProvSpec phaseless-prov-spec)))])
+  (PhaselessProvSpec : phaseless-prov-spec (e) -> phaseless-prov-spec ())
+  (PhaselessReqSpec : phaseless-req-spec (e) -> phaseless-req-spec ()))
 
 (splicing-let-syntax ([current-target (syntax-local-value #'current-target-top)])
   (module+ test
