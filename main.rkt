@@ -285,6 +285,7 @@
                     (for-meta phase-level phaseless-req-spec ...)
                     (just-meta phase-level raw-require-spec ...))
   (phaseless-req-spec (phaseless-req-spec)
+                      raw-module-path
                       (only raw-module-path id ...)
                       (all-except raw-module-path id ...)
                       (prefix-all-except id raw-module-path id* ...)
@@ -312,7 +313,7 @@
                        (all-from-except raw-module-path id ...)
                        (all-defined-except id ...)
                        (prefix-all-defined-except id id* ...)
-                       (protect phaseless-prov-spec ...)
+                       (protect* phaseless-prov-spec ...)
                        (expand (id . datum))))
 
 ;; Parse and alpha-rename expanded program
@@ -509,7 +510,7 @@
 
   (parse-raw-require-spec : * (form) -> raw-require-spec ()
                           (syntax-parse form
-                            #:literals (for-meta for-syntax for-template for-label just-meta)
+                            #:datum-literals (for-meta for-syntax for-template for-label just-meta)
                             [(for-meta phase-level phaseless-req-spec ...)
                              `(for-meta
                                ,(syntax-e #'phase-level)
@@ -534,11 +535,12 @@
                              `(just-meta
                                ,(syntax-e #'phase-level)
                                ,(for/list ([i (in-list (syntax->list #'(raw-req-spec ...)))])
-                                  (parse-raw-require-spec i)) ...)]))
+                                  (parse-raw-require-spec i)) ...)]
+                            [else (parse-phaseless-req-spec #'else)]))
 
   (parse-phaseless-req-spec : * (form) -> phaseless-req-spec ()
                             (syntax-parse form
-                              #:literals (only prefix all-except prefix-all-except rename)
+                              #:datum-literals (only prefix all-except prefix-all-except rename)
                               [(only raw-module-path ids:id ...)
                                `(only ,(parse-raw-module-path #'raw-module-path)
                                       ,(for/list ([i (in-list (syntax->list #'(ids ...)))])
@@ -559,11 +561,13 @@
                               [(rename raw-module-path id1:id id2:id)
                                `(rename ,(parse-raw-module-path #'raw-module-path)
                                         ,(syntax-e #'id1)
-                                        ,(syntax-e #'id2))]))
+                                        ,(syntax-e #'id2))]
+                              [else (parse-raw-module-path #'else)]))
 
   (parse-raw-provide-spec : * (form) -> raw-provide-spec ()
                           (syntax-parse form
-                            #:literals (for-meta for-syntax for-label protect)
+                            #:literals (for-meta for-syntax for-label)
+                            #:datum-literals (protect)
                             [(for-meta phase-level phaseless-prov-spec)
                              `(for-meta* ,(syntax-e #'phase-level)
                                          ,(parse-phaseless-prov-spec #'phaseless-prov-spec))]
@@ -572,7 +576,8 @@
                             [(for-label phaseless-prov-spec)
                              `(for-meta* ,#f ,(parse-phaseless-prov-spec #'phaseless-prov-spec))]
                             [(protect raw-provide-spec)
-                             `(protect ,(parse-raw-provide-spec #'raw-provide-spec))]))
+                             `(protect ,(parse-raw-provide-spec #'raw-provide-spec))]
+                            [else (parse-phaseless-prov-spec #'else)]))
 
   (parse-raw-module-path : * (form) -> raw-module-path ()
                          (syntax-parse form
@@ -603,10 +608,11 @@
                                 [else (syntax-e #'path)]))
 
   (parse-phaseless-prov-spec : * (form) -> phaseless-prov-spec ()
-                             (syntax-parse (form)
-                               #:literals (rename struct all-from all-from-except all-define
-                                                  all-defined-except prefix-all-defined
-                                                  prefix-all-defined-except protect expand)
+                             (syntax-parse form
+                               #:datum-literals (rename struct all-from all-from-except all-define
+                                                        all-defined-except prefix-all-defined
+                                                        prefix-all-defined-except expand protect)
+                               [id:id (syntax-e #'id)]
                                [(rename id1:id id2:id) `(rename* ,#'id1 ,#'id2)]
                                [(struct name:id (fields:id ...))
                                 `(struct ,#'name (,(for/list ([f (in-list (syntax->list #'(fields ...)))])
@@ -631,7 +637,7 @@
                                   ,(for/list ([i (in-list (syntax->list #'(ids ...)))])
                                      (syntax-e i)) ...)]
                                [(protect spec ...)
-                                `(protect ,(for/list ([s (in-list (syntax->list #'(spec ...)))])
+                                `(protect* ,(for/list ([s (in-list (syntax->list #'(spec ...)))])
                                              (parse-phaseless-prov-spec s)) ...)]
                                [(expand (id:id . datum))
                                 `(expand (,(syntax-e #'id) . ,(syntax-e #'datum)))]))
@@ -680,14 +686,13 @@
        `(#%expression (#%plain-lambda (a.1 b.3 . c.2)
                                       (#%plain-app (primitive apply) (primitive +) a.1 b.3 c.2))))
       (check-equal?
-       (current-compile #'(module foo racket
+       (current-compile #'(module foo racket/base
                             (#%plain-module-begin
-                             (require pict)
-                             (provide (except-out (all-from-out pict)
-                                                  bitmap)))))
-       `(module foo racket
-          ((#%require (all-except pict))
-           (#%provide (all-from-except pict bitmap)))))
+                             (require racket/match)
+                             (#%provide (all-from-except racket/match match)))))
+       `(module foo racket/base
+          ((#%require racket/match)
+           (#%provide (all-from-except racket/match match)))))
       (check-equal?
        (current-compile #'(module bar racket
                             (#%plain-module-begin
