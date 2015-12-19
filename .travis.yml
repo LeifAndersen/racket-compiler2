@@ -55,7 +55,7 @@ script:
  - raco pkg install --deps search-auto
  - raco test -x -p racket-compiler2
 
-after_success:
+after:
   - raco setup --check-deps zordoz
   - raco pkg install --deps search-auto cover
   - raco pkg install --deps search-auto cover-coveralls
