@@ -40,13 +40,13 @@
   (or (module-path? m) (not m)))
 
 (define (phase-level? pl)
-  (or (exact-nonnegative-integer? pl) (not pl)))
+  (or (exact-integer? pl) (not pl)))
 
 (define (declaration-keyword? dk)
   #t)
 
 (define (datum? d)
-  #t)
+  (not (syntax? d)))
 
 (define primitive-module
   (car (identifier-binding #'+)))
@@ -280,12 +280,9 @@
            id
            (id ...)
            (id id* ... . id2))
-  (raw-require-spec (raw-require-spec)
+  (raw-require-spec (raw-require-spec rrs)
                     phaseless-req-spec
                     (for-meta phase-level phaseless-req-spec ...)
-                    (for-syntax phaseless-req-spec ...)
-                    (for-template phaseless-req-spec ...)
-                    (for-label phaseless-prov-spec ...)
                     (just-meta phase-level raw-require-spec ...))
   (phaseless-req-spec (phaseless-req-spec)
                       (only raw-module-path id ...)
@@ -304,15 +301,13 @@
                         (planet string1
                                 (string2 string3 string* ...))
                         path)
-  (raw-provide-spec (raw-provide-spec)
+  (raw-provide-spec (raw-provide-spec rps)
                     phaseless-prov-spec
-                    (for-meta phase-level phaseless-prov-spec)
-                    (for-syntax phaseless-prov-spec)
-                    (for-label phaseless-prov-spec)
+                    (for-meta* phase-level phaseless-prov-spec)
                     (protect raw-provide-spec))
   (phaseless-prov-spec (phaseless-prov-spec)
                        id
-                       (rename id1 id2)
+                       (rename* id1 id2)
                        (struct id (id* ...))
                        (all-from-except raw-module-path id ...)
                        (all-defined-except id ...)
@@ -358,7 +353,8 @@
                #:literals (#%provide begin-for-syntax #%declare module module*
                                      #%plain-module-begin)
                [(#%provide spec ...)
-                `(#%provide ,(syntax->list #'(spec ...)) ...)]
+                `(#%provide ,(for/list ([s (in-list (syntax->list #'(spec ...)))])
+                               (parse-raw-provide-spec s)) ...)]
                [(begin-for-syntax body ...)
                 `(begin-for-syntax ,(for/list ([i (in-list (syntax->list #'(body ...)))])
                                       (parse-mod (syntax-shift-phase-level i -1) env)) ...)]
@@ -396,10 +392,11 @@
                [(define-syntaxes (id:id ...) body)
                 ;(define env* (extend-env env (syntax->list #'(id ...))))
                 `(define-syntaxes (,(for/list ([i (in-list (syntax->list #'(id ...)))])
-                                     (parse-expr i env)) ...)
+                                      (parse-expr i env)) ...)
                    ,(parse-expr #'body env))]
                [(#%require spec ...)
-                `(#%require ,(syntax->list #'(spec ...)))]
+                `(#%require ,(for/list ([s (in-list (syntax->list #'(spec ...)))])
+                               (parse-raw-require-spec s)) ...)]
                [else
                 (parse-expr #'else env)]))
 
@@ -510,6 +507,135 @@
                    (define env* (extend-env env (list #'rest)))
                    (values (parse-expr #'rest env*) env*)]))
 
+  (parse-raw-require-spec : * (form) -> raw-require-spec ()
+                          (syntax-parse form
+                            #:literals (for-meta for-syntax for-template for-label just-meta)
+                            [(for-meta phase-level phaseless-req-spec ...)
+                             `(for-meta
+                               ,(syntax-e #'phase-level)
+                               ,(for/list ([i (in-list (syntax->list #'(phaseless-req-spec ...)))])
+                                  (parse-phaseless-req-spec i)) ...)]
+                            [(for-syntax phaseless-req-spec ...)
+                             `(for-meta
+                               ,1
+                               ,(for/list ([i (in-list (syntax->list #'(phaseless-req-spec ...)))])
+                                  (parse-phaseless-req-spec i)) ...)]
+                            [(for-template phaseless-req-spec ...)
+                             `(for-meta
+                               ,#f
+                               ,(for/list ([i (in-list (syntax->list #'(phaseless-req-spec ...)))])
+                                  (parse-phaseless-req-spec i)) ...)]
+                            [(for-label phaseless-req-spec ...)
+                             `(for-meta
+                               ,-1
+                               ,(for/list ([i (in-list (syntax->list #'(phaseless-req-spec ...)))])
+                                  (parse-phaseless-req-spec i)) ...)]
+                            [(just-meta phase-level raw-req-spec ...)
+                             `(just-meta
+                               ,(syntax-e #'phase-level)
+                               ,(for/list ([i (in-list (syntax->list #'(raw-req-spec ...)))])
+                                  (parse-raw-require-spec i)) ...)]))
+
+  (parse-phaseless-req-spec : * (form) -> phaseless-req-spec ()
+                            (syntax-parse form
+                              #:literals (only prefix all-except prefix-all-except rename)
+                              [(only raw-module-path ids:id ...)
+                               `(only ,(parse-raw-module-path #'raw-module-path)
+                                      ,(for/list ([i (in-list (syntax->list #'(ids ...)))])
+                                         (syntax-e i)) ...)]
+                              [(prefix id:id raw-module-path)
+                               `(prefix-all-except ,(syntax-e #'id)
+                                                   ,(parse-raw-module-path #'raw-module-path))]
+                              [(all-except raw-module-path ids:id ...)
+                               `(all-except ,(parse-raw-module-path #'raw-module-path)
+                                            ,(for/list ([i (in-list (syntax->list #'(ids ...)))])
+                                               (syntax-e i)) ...)]
+                              [(prefix-all-except id:id raw-module-path ids:id ...)
+                               `(prefix-all-except
+                                 ,(syntax-e #'id)
+                                 ,(parse-raw-module-path #'raw-module-path)
+                                 ,(for/list ([i (in-list (syntax->list #'(ids ...))0)])
+                                    (syntax-e i)) ...)]
+                              [(rename raw-module-path id1:id id2:id)
+                               `(rename ,(parse-raw-module-path #'raw-module-path)
+                                        ,(syntax-e #'id1)
+                                        ,(syntax-e #'id2))]))
+
+  (parse-raw-provide-spec : * (form) -> raw-provide-spec ()
+                          (syntax-parse form
+                            #:literals (for-meta for-syntax for-label protect)
+                            [(for-meta phase-level phaseless-prov-spec)
+                             `(for-meta* ,(syntax-e #'phase-level)
+                                         ,(parse-phaseless-prov-spec #'phaseless-prov-spec))]
+                            [(for-syntax phaseless-prov-spec)
+                             `(for-meta* ,1 ,(parse-phaseless-prov-spec #'phaseless-prov-spec))]
+                            [(for-label phaseless-prov-spec)
+                             `(for-meta* ,#f ,(parse-phaseless-prov-spec #'phaseless-prov-spec))]
+                            [(protect raw-provide-spec)
+                             `(protect ,(parse-raw-provide-spec #'raw-provide-spec))]))
+
+  (parse-raw-module-path : * (form) -> raw-module-path ()
+                         (syntax-parse form
+                           #:literals (submod)
+                           [(submod path ids:id ...+)
+                            `(submod ,(parse-raw-root-module-path #'path)
+                                     ,(for/list ([i (in-list (syntax->list #'(ids ...)))])
+                                        (syntax-e i)) ...)]
+                           [else (parse-raw-root-module-path #'else)]))
+
+  (parse-raw-root-module-path : * (form) -> raw-root-module-path ()
+                              (syntax-parse form
+                                #:literals (quote lib file planet)
+                                [i:id (syntax-e #'i)]
+                                ; [s:string (syntax-e #'s)] TODO proper string syntax calss
+                                [(quote id:id) `(quote ,(syntax-e #'id))]
+                                [(lib s ...)
+                                 `(lib ,(for/list ([i (in-list (syntax->list #'(s ...)))])
+                                          (syntax-e i)) ...)]
+                                [(file s) `(file ,(syntax-e #'s))]
+                                [(planet s1
+                                         (s2 s3 s4 ...))
+                                 `(planet ,(syntax-e #'s1)
+                                          (,(syntax-e #'s2)
+                                           ,(syntax-e #'s3)
+                                           ,(for/list ([i (in-list (syntax->list #'(s4 ...)))])
+                                              (syntax-e i)) ...))]
+                                [else (syntax-e #'path)]))
+
+  (parse-phaseless-prov-spec : * (form) -> phaseless-prov-spec ()
+                             (syntax-parse (form)
+                               #:literals (rename struct all-from all-from-except all-define
+                                                  all-defined-except prefix-all-defined
+                                                  prefix-all-defined-except protect expand)
+                               [(rename id1:id id2:id) `(rename* ,#'id1 ,#'id2)]
+                               [(struct name:id (fields:id ...))
+                                `(struct ,#'name (,(for/list ([f (in-list (syntax->list #'(fields ...)))])
+                                                     (syntax-e f)) ...))]
+                               [(all-from raw-module-path)
+                                `(all-from-except ,(parse-raw-module-path #'raw-module-path))]
+                               [(all-from-except raw-module-path ids:id ...)
+                                `(all-from-except
+                                  ,(parse-raw-module-path #'raw-module-path)
+                                  ,(for/list ([i (in-list (syntax->list #'(ids ...)))])
+                                     (syntax-e i)) ...)]
+                               [(all-defined) `(all-defined-except)]
+                               [(all-defined-except ids:id ...)
+                                `(all-defined-except
+                                  ,(for/list ([i (in-list (syntax->list #'(ids ...)))])
+                                     (syntax-e i)) ...)]
+                               [(prefix-all-defined prefix:id)
+                                `(prefix-all-defined-except ,(syntax-e #'prefix))]
+                               [(prefix-all-defined-except prefix:id ids:id ...)
+                                `(prefix-all-defined-except
+                                  ,(syntax-e #'prefix)
+                                  ,(for/list ([i (in-list (syntax->list #'(ids ...)))])
+                                     (syntax-e i)) ...)]
+                               [(protect spec ...)
+                                `(protect ,(for/list ([s (in-list (syntax->list #'(spec ...)))])
+                                             (parse-phaseless-prov-spec s)) ...)]
+                               [(expand (id:id . datum))
+                                `(expand (,(syntax-e #'id) . ,(syntax-e #'datum)))]))
+
   (parse-top form initial-env))
 
 (splicing-let-syntax ([current-target (syntax-local-value #'current-target-top)])
@@ -552,7 +678,24 @@
        (current-compile #'(lambda (a b . c)
                             (apply + a b c)))
        `(#%expression (#%plain-lambda (a.1 b.3 . c.2)
-                                      (#%plain-app (primitive apply) (primitive +) a.1 b.3 c.2)))))))
+                                      (#%plain-app (primitive apply) (primitive +) a.1 b.3 c.2))))
+      (check-equal?
+       (current-compile #'(module foo racket
+                            (#%plain-module-begin
+                             (require pict)
+                             (provide (except-out (all-from-out pict)
+                                                  bitmap)))))
+       `(module foo racket
+          ((#%require (all-except pict))
+           (#%provide (all-from-except pict bitmap)))))
+      (check-equal?
+       (current-compile #'(module bar racket
+                            (#%plain-module-begin
+                             (define x 5)
+                             (provide x))))
+       `(module bar racket
+          ((define-values (x) '5)
+           (#%provide x)))))))
 
 ;; ===================================================================================================
 
