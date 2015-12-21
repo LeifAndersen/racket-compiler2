@@ -1,5 +1,7 @@
 #lang racket/base
 
+(provide compile)
+
 (require (except-in nanopass/base
                     define-language
                     define-pass)
@@ -117,13 +119,8 @@
        #`(test-case "Test case for finished compiler"
            #,(syntax/loc stx
                (check-equal?
-                (eval (bytes->compiled-expression (compile expression)))
+                (eval (compile expression))
                 (eval expression))))]))
-
-  (define (bytes->compiled-expression zo)
-    (parameterize ([read-accept-compiled #t])
-      (with-input-from-bytes zo
-        (lambda () (read)))))
 
   ;; Used to update the current compiler while testing
   (define current-compile-number 0)
@@ -2627,6 +2624,11 @@
     (expand-syntax-top-level-with-compile-time-evals
      (namespace-syntax-introduce stx))))
 
+(define (bytes->compiled-expression zo)
+  (parameterize ([read-accept-compiled #t])
+    (with-input-from-bytes zo
+      (lambda () (read)))))
+
 (define-compiler compile
   expand-syntax*
   parse-and-rename
@@ -2645,7 +2647,8 @@
   debruijn-indices
   find-let-depth
   generate-zo-structs
-  zo-marshal)
+  zo-marshal
+  bytes->compiled-expression)
 
 (module+ test
   (run-all-compiler-tests))
