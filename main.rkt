@@ -733,7 +733,7 @@
   (SubmoduleForm : submodule-form (e) -> module-level-form ('() '())
                  [(submodule ,id ,module-path
                              (,[module-level-form pre post] ...))
-                  (values `(#%plain-app void)
+                  (values `(#%plain-app (primitive void))
                           (list (with-output-language (L1 submodule-form)
                                   `(module ,id ,module-path
                                      (,module-level-form ...)
@@ -742,7 +742,7 @@
                           null)]
                  [(submodule* ,id ,module-path
                               (,[module-level-form pre post] ...))
-                  (values `(#%plain-app void)
+                  (values `(#%plain-app (primitive void))
                           null
                           (list (with-output-language (L1 submodule-form)
                                   `(module ,id ,module-path
@@ -751,7 +751,7 @@
                                      (,(append* post) ...)))))]
                  [(submodule* ,id
                               (,[module-level-form pre post] ...))
-                  (values `(#%plain-app void)
+                  (values `(#%plain-app (primitive void))
                           null
                           (list (with-output-language (L1 submodule-form)
                                   `(module ,id #f
@@ -781,9 +781,9 @@
                                (#%plain-module-begin
                                 1)))))
        `(module foo racket/base
-          ((#%plain-app void)
+          ((#%plain-app (primitive void))
            (define-values (x) '5)
-           (#%plain-app void))
+           (#%plain-app (primitive void)))
           ((module bar racket/base
              ('12) () ()))
           ((module baz racket/base
@@ -799,7 +799,7 @@
        `(module outer racket
           ((begin-for-syntax
              (define-values (x) '6)
-             (#%plain-app void)))
+             (#%plain-app (primitive void))))
           ()
           ((module test #f
              (x) () ()))))
@@ -816,8 +816,8 @@
                                (define x 5))
                              x)))
        `(module foo racket/base
-          ((#%plain-app void)
-           (#%plain-app void)
+          ((#%plain-app (primitive void))
+           (#%plain-app (primitive void))
            (define-values (x) '5)
            x)
           ((module bar racket/base
@@ -834,9 +834,9 @@
                                   (#%plain-module-begin
                                    42)))))))
        `(module foo racket/base
-          ((#%plain-app void))
+          ((#%plain-app (primitive void)))
           ((module bar racket/base
-             ((#%plain-app void))
+             ((#%plain-app (primitive void)))
              ((module baz racket/base
                 ('42)
                 () ()))
@@ -873,7 +873,7 @@
                  `(#%require ,raw-require-spec ...)])
   (GeneralTopLevelForm : general-top-level-form (e [meta-level 0]) -> general-top-level-form ('() '())
                        [(#%require ,raw-require-spec ...)
-                        (values `(#%plain-app void)
+                        (values `(#%plain-app (primitive void))
                                 null
                                 (for/list ([rrs (in-list raw-require-spec)])
                                   (RawRequireSpec rrs meta-level)))])
@@ -884,7 +884,7 @@
                             (append* prov)
                             (append* req))]
                    [(#%provide ,raw-provide-spec ...)
-                    (values `(#%plain-app void)
+                    (values `(#%plain-app (primitive void))
                             (for/list ([rps (in-list raw-provide-spec)])
                               (RawProvideSpec rps meta-level))
                             null)])
@@ -941,7 +941,7 @@
            (all-defined-except))
           ((for-meta 1 racket/match)
            (for-meta 2 racket/list))
-          ((#%plain-app void) (#%plain-app void))
+          ((#%plain-app (primitive void)) (#%plain-app (primitive void)))
           () ()))
       (check-equal?
        (current-compile #'(module foo racket/base
@@ -954,7 +954,7 @@
           ()
           ((begin-for-syntax
              (define-values (x) '5)
-             (#%plain-app void)))
+             (#%plain-app (primitive void))))
           () ())))))
 
 ;; ===================================================================================================
@@ -1022,7 +1022,7 @@
                    [(begin-for-syntax
                       ,[module-level-form syntax-table (+ meta-level 1)
                                           -> module-level-form* syntax-table*] ...)
-                    (values `(#%plain-app void)
+                    (values `(#%plain-app (primitive void))
                             (syntax-add-body (merge-syntax-tables syntax-table*)
                                              (+ meta-level 1)
                                              (with-output-language (current-target syntax-body)
@@ -1033,7 +1033,7 @@
   (GeneralTopLevelForm : general-top-level-form (e [meta-level 0] [syntax-table (hash)])
                        -> general-top-level-form ((hash))
                        [(define-syntaxes (,id ...) ,[expr])
-                        (values `(#%plain-app void)
+                        (values `(#%plain-app (primitive void))
                                 (syntax-add-body syntax-table
                                                  (+ meta-level 1)
                                                  (with-output-language (current-target syntax-body)
@@ -1052,8 +1052,8 @@
                              (define-syntax foo (lambda (x) x)))))
        `(module foo racket
           () ()
-          ((#%plain-app void)
-           (#%plain-app void))
+          ((#%plain-app (primitive void))
+           (#%plain-app (primitive void)))
           ((syntax 1 ((begin-for-syntax
                         (define-values (x) '5))
                       (define-syntaxes (foo) (#%plain-lambda (x.1) x.1)))))
@@ -1680,10 +1680,10 @@
                     (,[raw-provide-spec] ...)
                     (,[raw-require-spec] ...)
                     (,[module-level-form free-local free-global] ...)
-                    (,[syntax-level-form] ...)
+                    (,[syntax-level-form free-local*** free-global***] ...)
                     (,[submodule-form** free-local** free-global**] ...)
                     (,[submodule-form* free-local* free-global*] ...))
-                  (values `(module ,id ,module-path (,(apply set-union '() free-global) ...)
+                  (values `(module ,id ,module-path (,(apply set-union '() (append free-global free-global***)) ...)
                                    (,raw-provide-spec ...)
                                    (,raw-require-spec ...)
                                    (,module-level-form ...)
@@ -1691,6 +1691,7 @@
                                    (,submodule-form** ...)
                                    (,submodule-form* ...))
                           '() '())])
+  (SyntaxLevelForm : syntax-level-form (e env) -> syntax-level-form ('() '()))
   (let-values ([(e* local* global*) (TopLevelForm e '())])
     `(program (,global* ...) ,e*)))
 
@@ -1760,7 +1761,20 @@
        `(program (#f) (#%expression
                        (#%plain-lambda (x.1)
                                        (free () (#f)
-                                             (#%variable-reference)))))))))
+                                             (#%variable-reference))))))
+      (check-equal?
+       (current-compile #'(module foobar racket/base
+                            (#%plain-module-begin
+                             (define x 5)
+                             (define-values (y z) (values 6 7))
+                             (define-syntax w 'hello))))
+       `(program () (module foobar racket/base (x y z w)
+                            () ()
+                            ((define-values (x) '5)
+                             (define-values (y z) (#%plain-app values '6 '7))
+                             (#%plain-app (primitive void)))
+                            ((syntax 1 ((define-syntaxes (w) 'hello))))
+                            () ()))))))
 
 ;; ===================================================================================================
 
@@ -1799,18 +1813,16 @@
                           (,[raw-require-spec] ...)
                           (,module-level-form ...)
                           (,[syntax-level-form] ...)
-                          (,[submodule-form] ...)
-                          (,[submodule-form*] ...))
+                          (,[submodule-form1 (set-union globals id*) -> submodule-form] ...)
+                          (,[submodule-form1* (set-union globals id*) -> submodule-form*] ...))
                   `(module ,id ,module-path (,id* ...)
                            (,raw-provide-spec ...)
                            (,raw-require-spec ...)
                            (,(for/list ([mlf (in-list module-level-form)])
                                (ModuleLevelForm mlf id*)) ...)
                            (,syntax-level-form ...)
-                           (,(for/list ([sf (in-list submodule-form)])
-                               (SubmoduleForm sf id*)) ...)
-                           (,(for/list ([sf (in-list submodule-form*)])
-                               (SubmoduleForm sf id*)) ...))]))
+                           (,submodule-form ...)
+                           (,submodule-form* ...))]))
 
 (splicing-let-syntax ([current-target (syntax-local-value #'current-target-top)])
   (module+ test
@@ -2137,17 +2149,17 @@
                           (,[syntax-level-form] ...)
                           (,submodule-form ...)
                           (,submodule-form* ...))
-                  (define global-env* (make-global-env id*))
+                  (define global-env* (set-union global-env (make-global-env id*)))
                   `(module ,id ,module-path (,id* ...)
                            (,raw-provide-spec ...)
                            (,raw-require-spec ...)
                            (,(for/list ([mlf (in-list module-level-form)])
-                               (ModuleLevelForm mlf env frame global-env prefix-frame)) ...)
+                               (ModuleLevelForm mlf env frame global-env* prefix-frame)) ...)
                            (,syntax-level-form ...)
                            (,(for/list ([sf (in-list submodule-form)])
-                               (SubmoduleForm sf env frame global-env prefix-frame)) ...)
+                               (SubmoduleForm sf env frame global-env* prefix-frame)) ...)
                            (,(for/list ([sf (in-list submodule-form*)])
-                               (SubmoduleForm sf env frame global-env prefix-frame)) ...))])
+                               (SubmoduleForm sf env frame global-env* prefix-frame)) ...))])
   (ModuleLevelForm : module-level-form (e [env '()] [frame 0] [global-env '()] [prefix-frame 0])
                    -> module-level-form ())
   (CompilationTop : compilation-top (e) -> compilation-top ()
