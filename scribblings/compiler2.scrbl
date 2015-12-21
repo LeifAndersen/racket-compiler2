@@ -1,6 +1,6 @@
 #lang scribble/manual
 @require[@for-label[compiler2
-                    racket/base]]
+                    @except-in[racket/base compile]]]
 
 @title{compiler2}
 @author{leif}
