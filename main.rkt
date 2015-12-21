@@ -339,10 +339,9 @@
                 `(#%expression ,(parse-expr #'body env))]
                [(module id:id path
                   (#%plain-module-begin body ...))
-                (define env* (extend-env env (list #'id)))
                 `(module ,(syntax->datum #'id) ,(syntax->datum #'path)
                    (,(for/list ([i (in-list (syntax->list #'(body ...)))])
-                      (parse-mod i env*)) ...))]
+                      (parse-mod i env)) ...))]
                [(begin body ...)
                 `(begin* ,(for/list ([i (in-list (syntax->list #'(body ...)))])
                             (parse-top i env)) ...)]
@@ -366,22 +365,19 @@
                 `(#%declare ,(syntax->list #'(keyword ...)) ...)]
                [(module id:id path
                   (#%plain-module-begin body ...))
-                (define env* (extend-env env (list #'id)))
                 `(submodule ,(syntax->datum #'id) ,(syntax->datum #'path)
                             (,(for/list ([i (in-list (syntax->list #'(body ...)))])
-                                (parse-mod i env*)) ...))]
+                                (parse-mod i env)) ...))]
                [(module* id:id path
                   (#%plain-module-begin body ...))
-                (define env* (extend-env env (list #'id)))
                 `(submodule* ,(syntax->datum #'id) ,(syntax->datum #'path)
                              (,(for/list ([i (in-list (syntax->list #'(body ...)))])
-                                 (parse-mod i env*)) ...))]
+                                 (parse-mod i env)) ...))]
                [(module* id:id path
                   (#%plain-module-begin body ...))
-                (define env* (extend-env env (list #'id)))
                 `(submodule* ,(syntax->datum #'id)
                              (,(for/list ([i (in-list (syntax->list #'(body ...)))])
-                                 (parse-mod i env*)) ...))]
+                                 (parse-mod i env)) ...))]
                [else
                 (parse-gen #'else env)]))
 
@@ -1062,8 +1058,8 @@
           ((#%plain-app void)
            (#%plain-app void))
           ((syntax 1 ((begin-for-syntax
-                        (define-values (x.1) '5))
-                      (define-syntaxes (foo) (#%plain-lambda (x.2) x.2)))))
+                        (define-values (x) '5))
+                      (define-syntaxes (foo) (#%plain-lambda (x.1) x.1)))))
           () ())))))
 
 
