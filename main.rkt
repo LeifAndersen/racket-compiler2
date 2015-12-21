@@ -2370,7 +2370,23 @@
                           (,syntax-level-form ...)
                           (,submodule-form ...)
                           (,submodule-form* ...))
-                  (void)])
+                  (zo:mod id
+                          id
+                          (module-path-index-join #f #f #f)
+                          (zo:prefix 0 id* '() 'missing)
+                          (RawProvideSpec raw-provide-spec)
+                          (RawRequireSpec raw-require-spec)
+                          (ModuleLevelForm module-level-form)
+                          '()
+                          '()
+                          eni
+                          (zo:toplevel 0 0 #f #f)
+                          #f
+                          #f
+                          (hash)
+                          '()
+                          (SubmoduleForm submodule-form)
+                          (SubmoduleForm submodule-form*))])
   (GeneralTopLevelForm : general-top-level-form (e) -> * ()
                        [(define-values (,eni ...) ,expr)
                         (zo:def-values (for/list ([i (in-list eni)])
@@ -2448,7 +2464,55 @@
                    (map (lambda (x) 'val/ref) binding2)
                    (if (null? binding3) #f (list->set binding3))
                    eni4
-                   (Expr expr))]))
+                   (Expr expr))])
+  (RawProvideSpec : raw-provide-spec (e) -> * ()
+                  [(for-meta* ,phase-level ,phaseless-prov-spec)
+                   (void)]
+                  [(protect ,raw-provide-spec)
+                   (void)])
+  (PhaselessProvSpec : phaseless-prov-spec (e) -> * ()
+                     [,id (void)]
+                     [(rename* ,id1 ,id2)
+                      (void)]
+                     [(struct ,id (,id* ...))
+                      (void)]
+                     [(all-from-except ,raw-module-path ,id ...)
+                      (void)]
+                     [(all-defined-except ,id ...)
+                      (void)]
+                     [(prefix-all-defined-except ,id ,id* ...)
+                      (void)]
+                     [(protect* ,phaseless-prov-spec ...)
+                      (void)]
+                     [(expand (,id . ,datum))
+                      (void)])
+  (RawRequireSpec : raw-require-spec (e) -> * ()
+                  [(for-meta ,phase-level ,phaseless-req-spec ...)
+                   (void)]
+                  [(just-meta ,phase-level ,raw-require-spec ...)
+                   (void)])
+  (PhaselessReqSpec : phaseless-req-spec (e) -> * ()
+                    [(only ,raw-module-path ,id ...)
+                     (void)]
+                    [(all-except ,raw-module-path ,id ...)
+                     (void)]
+                    [(prefix-all-except ,id ,raw-module-path ,id* ...)
+                     (void)]
+                    [(rename ,raw-module-path ,id1 ,id2)
+                     (void)])
+  (RawModulePath : raw-module-path (e) -> * ()
+                 [(submod ,raw-root-module-path ,id ...)
+                  (void)])
+  (RawRootModulePath : raw-root-module-path (e) -> * ()
+                     [,id (void)]
+                     [,string (void)]
+                     [(quote ,id) (void)]
+                     [(lib ,string ...) (void)]
+                     [(file ,string) (void)]
+                     [(planet ,string1
+                              (,string2 ,string3 ,string* ...))
+                      (void)]
+                     [,path (void)]))
 
 (module+ test
   (set! all-compiler-tests
