@@ -10,6 +10,7 @@
          racket/match
          racket/set
          racket/dict
+         racket/hash
          racket/port
          racket/list
          racket/function
@@ -229,7 +230,9 @@
    (string (string))
    (path (path))
    (phase-level (phase-level))
-   (false (false)))
+   (false (false))
+   (exact-nonnegative-integer (exact-nonnegative-integer eni))
+   (boolean (boolean)))
   (top-level-form (top-level-form)
                   general-top-level-form
                   (#%expression expr)
@@ -394,7 +397,7 @@
                 ;(define env* (extend-env env (syntax->list #'(id ...))))
                 `(define-syntaxes (,(for/list ([i (in-list (syntax->list #'(id ...)))])
                                       (parse-expr i env)) ...)
-                   ,(parse-expr #'body env))]
+                   ,(parse-expr (syntax-shift-phase-level #'body -1) env))]
                [(#%require spec ...)
                 `(#%require ,(for/list ([s (in-list (syntax->list #'(spec ...)))])
                                (parse-raw-require-spec s)) ...)]
@@ -882,19 +885,11 @@
                                 (for/list ([rrs (in-list raw-require-spec)])
                                   (RawRequireSpec rrs meta-level)))])
   (ModuleLevelForm : module-level-form (e [meta-level 0]) -> module-level-form ('() '())
-                   [(begin-for-syntax ,module-level-form ...)
-                    (define-values (mlf prov req) (for/fold ([mlfs '()]
-                                                             [prov '()]
-                                                             [req '()])
-                                                            ([mlf (in-list module-level-form)])
-                                                    (define-values (m p r)
-                                                      (ModuleLevelForm mlf (+ meta-level 1)))
-                                                    (values (cons m mlfs)
-                                                            (cons p prov)
-                                                            (cons r req))))
-                    (values `(begin-for-syntax ,(reverse mlf) ...)
-                            (append* (reverse prov))
-                            (append* (reverse req)))]
+                   [(begin-for-syntax
+                      ,[module-level-form (+ meta-level 1) -> module-level-form prov req] ...)
+                    (values `(begin-for-syntax ,module-level-form ...)
+                            (append* prov)
+                            (append* req))]
                    [(#%provide ,raw-provide-spec ...)
                     (values `(#%plain-app void)
                             (for/list ([rps (in-list raw-provide-spec)])
@@ -968,6 +963,109 @@
              (define-values (x) '5)
              (#%plain-app void)))
           () ())))))
+
+;; ===================================================================================================
+
+(update-current-languages! L)
+
+(define-language current-target
+  (extends current-source)
+  (submodule-form (submodule-form)
+                  (- (module id module-path
+                       (raw-provide-spec ...)
+                       (raw-require-spec ...)
+                       (module-level-form ...)
+                       (submodule-form ...)
+                       (submodule-form* ...)))
+                  (+ (module id module-path
+                       (raw-provide-spec ...)
+                       (raw-require-spec ...)
+                       (module-level-form ...)
+                       (syntax-level-form ...)
+                       (submodule-form ...)
+                       (submodule-form* ...))))
+  (syntax-level-form (syntax-level-form)
+                     (+ (syntax eni (syntax-body ...))))
+  (syntax-body (syntax-body)
+               (+ (begin-for-syntax module-level-form ...)
+                  (define-syntaxes (id ...) expr)))
+  (module-level-form (module-level-form)
+                     (- (begin-for-syntax module-level-form ...)))
+  (general-top-level-form (general-top-level-form)
+                          (- (define-syntaxes (id ...) expr)))
+  (top-level-form (top-level-form)
+                  (+ (define-syntaxes* (id ...) expr))))
+
+(define-pass lift-syntax-sequences : current-source (e) -> current-target ()
+  (definitions
+    (define (merge-syntax-tables tables)
+      (apply hash-union (hash) tables
+             #:combine (lambda (v1 v2)
+                         (append v1 v2))))
+    (define (build-from-table syntax-table)
+      (for/list ([(k v) (in-hash syntax-table)])
+        (with-output-language (current-target syntax-level-form)
+          `(syntax ,k (,v ...)))))
+    (define (syntax-add-body syntax-bodies meta-level . body)
+      (dict-update syntax-bodies meta-level
+                   (lambda (existing) (append existing body))
+                   (lambda () null))))
+  (SubmoduleForm : submodule-form (e) -> submodule-form ()
+                 [(module ,id ,module-path
+                    (,[raw-provide-spec] ...)
+                    (,[raw-require-spec] ...)
+                    (,[module-level-form syntaxes] ...)
+                    (,[submodule-form] ...)
+                    (,[submodule-form*] ...))
+                  `(module ,id ,module-path
+                     (,raw-provide-spec ...)
+                     (,raw-require-spec ...)
+                     (,module-level-form ...)
+                     (,(build-from-table (merge-syntax-tables syntaxes)) ...)
+                     (,submodule-form ...)
+                     (,submodule-form* ...))])
+  (ModuleLevelForm : module-level-form (e [meta-level 0] [syntax-table (hash)])
+                   -> module-level-form ((hash))
+                   [(begin-for-syntax
+                      ,[module-level-form syntax-table (+ meta-level 1)
+                                          -> module-level-form* syntax-table*] ...)
+                    (values `(#%plain-app void)
+                            (syntax-add-body (merge-syntax-tables syntax-table*)
+                                             (+ meta-level 1)
+                                             (with-output-language (current-target syntax-body)
+                                               `(begin-for-syntax ,module-level-form* ...))))])
+  (TopLevelForm : top-level-form (e) -> top-level-form ()
+                [(define-syntaxes (,id ...) ,[expr])
+                 `(define-syntaxes* (,id ...) ,expr)])
+  (GeneralTopLevelForm : general-top-level-form (e [meta-level 0] [syntax-table (hash)])
+                       -> general-top-level-form ((hash))
+                       [(define-syntaxes (,id ...) ,[expr])
+                        (values `(#%plain-app void)
+                                (syntax-add-body syntax-table
+                                                 (+ meta-level 1)
+                                                 (with-output-language (current-target syntax-body)
+                                                   `(define-syntaxes (,id ...) ,expr))))])
+  (Expr : expr (e) -> expr ((hash))))
+
+(splicing-let-syntax ([current-target (syntax-local-value #'current-target-top)])
+  (module+ test
+    (update-current-compile!)
+    (define-compiler-test current-target top-level-form
+      (check-equal?
+       (current-compile #'(module foo racket
+                            (#%plain-module-begin
+                             (begin-for-syntax
+                               (define x 5))
+                             (define-syntax foo (lambda (x) x)))))
+       `(module foo racket
+          () ()
+          ((#%plain-app void)
+           (#%plain-app void))
+          ((syntax 1 ((begin-for-syntax
+                        (define-values (x.1) '5))
+                      (define-syntaxes (foo) (#%plain-lambda (x.2) x.2)))))
+          () ())))))
+
 
 ;; ===================================================================================================
 
@@ -1120,19 +1218,16 @@
                          (apply set-union '() assigned))]
                 [(#%expression ,[expr assigned])
                  (values `(#%expression ,expr)
-                         assigned)])
-  (ModuleLevelForm : module-level-form (e) -> module-level-form ('())
-                   [(begin-for-syntax ,[module-level-form assigned] ...)
-                    (values `(begin-for-syntax ,module-level-form ...)
-                            (apply set-union '() assigned))])
+                         assigned)]
+                [(define-syntaxes* (,id ...) ,[expr assigned])
+                 (values `(define-syntaxes* (,id ...) ,expr)
+                         (set-subtract assigned id))])
   (GeneralTopLevelForm : general-top-level-form (e) -> general-top-level-form ('())
                        [(define-values (,id ...) ,[expr assigned])
                         (values `(define-values (,id ...) ,expr)
-                                (set-subtract assigned id))]
-                       [(define-syntaxes (,id ...) ,[expr assigned])
-                        (values `(define-syntaxes (,id ...) ,expr)
                                 (set-subtract assigned id))])
   (SubmoduleForm : submodule-form (e) -> submodule-form ('()))
+  (ModuleLevelForm : module-level-form (e) -> module-level-form ('()))
   (let-values ([(e* free*) (TopLevelForm e)])
     e*))
 
@@ -1443,12 +1538,14 @@
                        (raw-provide-spec ...)
                        (raw-require-spec ...)
                        (module-level-form ...)
+                       (syntax-level-form ...)
                        (submodule-form ...)
                        (submodule-form* ...)))
                   (+ (module id module-path (id* ...)
                              (raw-provide-spec ...)
                              (raw-require-spec ...)
                              (module-level-form ...)
+                             (syntax-level-form ...)
                              (submodule-form ...)
                              (submodule-form* ...))))
   (lambda (lambda)
@@ -1476,10 +1573,6 @@
   (GeneralTopLevelForm : general-top-level-form (e [env '()]) -> general-top-level-form ('() '())
                        [(define-values (,id ...) ,[expr free-local free-global])
                         (values `(define-values (,id ...) ,expr)
-                                free-local
-                                (set-union free-global id))]
-                       [(define-syntaxes (,id ...) ,[expr free-local free-global])
-                        (values `(define-syntaxes (,id ...) ,expr)
                                 free-local
                                 (set-union free-global id))])
   (Expr : expr (e [env '()]) -> expr ('() '())
@@ -1583,21 +1676,25 @@
                          (apply set-union '() free-local)
                          (apply set-union '() free-global))]
                 [(#%expression ,[expr free-local free-global])
-                 (values `(#%expression ,expr) free-local free-global)])
-  (ModuleLevelForm : module-level-form (e [env '()]) -> module-level-form ('() '())
-                   [(begin-for-syntax ,[module-level-form free-local free-global])
-                    (values `(begin-for-syntax module-level-form) free-local free-global)])
+                 (values `(#%expression ,expr) free-local free-global)]
+                [(define-syntaxes* (,id ...) ,[expr free-local free-global])
+                 (values `(define-syntaxes* (,id ...) ,expr)
+                         free-local
+                         (set-union free-global id))])
+  (ModuleLevelForm : module-level-form (e [env '()]) -> module-level-form ('() '()))
   (SubmoduleForm : submodule-form (e env) -> submodule-form ('() '())
                  [(module ,id ,module-path
                     (,[raw-provide-spec] ...)
                     (,[raw-require-spec] ...)
                     (,[module-level-form free-local free-global] ...)
+                    (,[syntax-level-form] ...)
                     (,[submodule-form** free-local** free-global**] ...)
                     (,[submodule-form* free-local* free-global*] ...))
                   (values `(module ,id ,module-path (,(apply set-union '() free-global) ...)
                                    (,raw-provide-spec ...)
                                    (,raw-require-spec ...)
                                    (,module-level-form ...)
+                                   (,syntax-level-form ...)
                                    (,submodule-form** ...)
                                    (,submodule-form* ...))
                           '() '())])
@@ -1663,7 +1760,7 @@
                                  () ()
                                  ((define-values (x) '12)
                                   (define-values (z) '13))
-                                 () ()))))
+                                 () () ()))))
       (check-equal?
        (current-compile #'(lambda (x)
                             (#%variable-reference)))
@@ -1708,6 +1805,7 @@
                           (,[raw-provide-spec] ...)
                           (,[raw-require-spec] ...)
                           (,module-level-form ...)
+                          (,[syntax-level-form] ...)
                           (,[submodule-form] ...)
                           (,[submodule-form*] ...))
                   `(module ,id ,module-path (,id* ...)
@@ -1715,6 +1813,7 @@
                            (,raw-require-spec ...)
                            (,(for/list ([mlf (in-list module-level-form)])
                                (ModuleLevelForm mlf id*)) ...)
+                           (,syntax-level-form ...)
                            (,(for/list ([sf (in-list submodule-form)])
                                (SubmoduleForm sf id*)) ...)
                            (,(for/list ([sf (in-list submodule-form*)])
@@ -1907,9 +2006,6 @@
 
 (define-language current-target
   (extends current-source)
-  (terminals
-   (+ (exact-nonnegative-integer (exact-nonnegative-integer eni))
-      (boolean (boolean))))
   (expr (expr)
         (- id
            (primitive id)
@@ -2045,6 +2141,7 @@
                           (,[raw-provide-spec] ...)
                           (,[raw-require-spec] ...)
                           (,module-level-form ...)
+                          (,[syntax-level-form] ...)
                           (,submodule-form ...)
                           (,submodule-form* ...))
                   (define global-env* (make-global-env id*))
@@ -2053,6 +2150,7 @@
                            (,raw-require-spec ...)
                            (,(for/list ([mlf (in-list module-level-form)])
                                (ModuleLevelForm mlf env frame global-env prefix-frame)) ...)
+                           (,syntax-level-form ...)
                            (,(for/list ([sf (in-list submodule-form)])
                                (SubmoduleForm sf env frame global-env prefix-frame)) ...)
                            (,(for/list ([sf (in-list submodule-form*)])
@@ -2116,12 +2214,14 @@
                              (raw-provide-spec ...)
                              (raw-require-spec ...)
                              (module-level-form ...)
+                             (syntax-level-form ...)
                              (submodule-form ...)
                              (submodule-form* ...)))
                   (+ (module id module-path (id* ...) eni
                              (raw-provide-spec ...)
                              (raw-require-spec ...)
                              (module-level-form ...)
+                             (syntax-level-form ...)
                              (submodule-form ...)
                              (submodule-form* ...))))
   (lambda (lambda)
@@ -2187,30 +2287,29 @@
                          (apply max 0 depth))]
                 [(begin-for-syntax* ,[top-level-form depth] ...)
                  (values `(begin-for-syntax* ,top-level-form ...)
-                         (apply max 0 depth))])
-  (ModuleLevelForm : module-level-form (e) -> module-level-form (0)
-                   [(begin-for-syntax ,[module-level-form depth] ...)
-                    (values `(begin-for-syntax ,module-level-form ...)
-                            (apply max 0 depth))])
+                         (apply max 0 depth))]
+                [(define-syntaxes* (,id ...) ,[expr depth])
+                 (values `(define-syntaxes* (,id ...) ,expr) depth)])
+  (ModuleLevelForm : module-level-form (e) -> module-level-form (0))
   (SubmoduleForm : submodule-form (e) -> submodule-form (0)
                  [(module ,id ,module-path (,id* ...)
                           (,[raw-provide-spec] ...)
                           (,[raw-require-spec] ...)
                           (,[module-level-form depth] ...)
+                          (,[syntax-level-form] ...)
                           (,[submodule-form** depth**] ...)
                           (,[submodule-form* depth*] ...))
                   (values `(module ,id ,module-path (,id* ...) ,(apply max '() depth)
                                    (,raw-provide-spec ...)
                                    (,raw-require-spec ...)
                                    (,module-level-form ...)
+                                   (,syntax-level-form ...)
                                    (,submodule-form** ...)
                                    (,submodule-form* ...))
                           0)])
   (GeneralTopLevelForm : general-top-level-form (e) -> general-top-level-form (0)
                        [(define-values (,eni ...) ,[expr depth])
-                        (values `(define-values (,eni ...) ,expr) depth)]
-                       [(define-syntaxes (,id ...) ,[expr depth])
-                        (values `(define-syntaxes (,id ...) ,expr) depth)])
+                        (values `(define-values (,eni ...) ,expr) depth)])
   (CompilationTop : compilation-top (e) -> compilation-top ()
                   [(program (,binding ...) ,[top-level-form depth])
                    `(program ,depth (,binding ...) ,top-level-form)]))
@@ -2261,10 +2360,10 @@
                 [(#%require ,raw-require-spec ...)
                  (void)]
                 [(begin-for-syntax* ,top-level-form ...)
+                 (void)]
+                [(define-syntaxes* (,id ...) ,expr)
                  (void)])
   (ModuleLevelForm : module-level-form (e) -> * ()
-                   [(begin-for-syntax ,module-level-form ...)
-                    (void)]
                    [(#%declare ,declaration-keyword ...)
                     (void)])
   (SubmoduleForm : submodule-form (e) -> * ()
@@ -2272,6 +2371,7 @@
                           (,raw-provide-spec ...)
                           (,raw-require-spec ...)
                           (,module-level-form ...)
+                          (,syntax-level-form ...)
                           (,submodule-form ...)
                           (,submodule-form* ...))
                   (void)])
@@ -2279,9 +2379,7 @@
                        [(define-values (,eni ...) ,expr)
                         (zo:def-values (for/list ([i (in-list eni)])
                                          (zo:toplevel 0 i #f #f))
-                                       (Expr expr))]
-                       [(define-syntaxes (,id ...) ,expr)
-                        (void)])
+                                       (Expr expr))])
   (Bidnding : binding (e) -> * ()
             [,false false]
             [,id id]
@@ -2474,6 +2572,7 @@
   parse-and-rename
   lift-submodules
   lift-require-provide
+  lift-syntax-sequences
   make-begin-explicit
   identify-assigned-variables
   purify-letrec
