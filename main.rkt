@@ -1116,7 +1116,7 @@
                            (,submodule-form ...)
                            (,submodule-form* ...))])
   (SyntaxLevelForm : syntax-level-form (e previous-syntaxes) -> syntax-level-form ('() '())
-                   [(syntax ,eni (,[syntax-body syntaxes bindings] ...))
+                   [(syntax ,eni (,[syntax-body bindings syntaxes] ...))
                     (define flattened-bindings (apply set-union '() bindings))
                     (values `(syntax ,eni
                                      (,flattened-bindings ...)
@@ -1131,7 +1131,8 @@
                        id)]
               [(begin-for-syntax ,[module-level-form bindings] ...)
                (values `(begin-for-syntax ,module-level-form ...)
-                       (apply set-union '() bindings))])
+                       (apply set-union '() bindings)
+                       null)])
   (ModuleLevelForm : module-level-form (e) -> module-level-form ('()))
   (GeneralTopLevelForm : general-top-level-form (e) -> general-top-level-form ('())
                        [(define-values (,id ...) ,[expr])
@@ -1143,7 +1144,23 @@
   (module+ test
     (update-current-compile!)
     (define-compiler-test current-target top-level-form
-      (check-equal? #t #t))))
+      (check-equal?
+       (current-compile #'(module foo racket
+                            (#%plain-module-begin
+                             (define x 5)
+                             (define-syntax y 6)
+                             (begin-for-syntax
+                               (define z 8)))))
+       `(module foo racket (x) (y)
+                () ()
+                ((define-values (x) '5)
+                 (#%plain-app (primitive void))
+                 (#%plain-app (primitive void)))
+                ((syntax 1 (z) ()
+                         ((define-syntaxes (y) '6)
+                          (begin-for-syntax
+                            (define-values (z) '8)))))
+                () ())))))
 
 ;; ===================================================================================================
 
@@ -1824,10 +1841,10 @@
                              (define x 5)
                              (define-values (y z) (values 6 7))
                              (define-syntax w 'hello))))
-       `(program () (module foobar racket/base (x y z) (w)
+       `(program () (module foobar racket/base (z y x) (w)
                             () ()
                             ((define-values (x) '5)
-                             (define-values (y z) (#%plain-app values '6 '7))
+                             (define-values (y z) (#%plain-app (primitive values) '6 '7))
                              (#%plain-app (primitive void)))
                             ((syntax 1 () () ((define-syntaxes (w) 'hello))))
                             () ()))))))
