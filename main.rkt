@@ -144,6 +144,7 @@
                  [(,id (... ...))             #f]
                  [(,id ,id* (... ...) . ,id2) #t]))
 
+; Language box, for creating current-source and current-target
 (begin-for-syntax
   (struct language-box (language)
     #:mutable
@@ -153,6 +154,8 @@
       (syntax-property (language-box-language inst)
                        'not-free-identifier=?
                        #t))))
+
+; Macro used for setting langauge-box
 (define-syntax (set-language! stx)
   (syntax-parse stx
     [(_ box language)
@@ -160,6 +163,7 @@
          (define-values (val trans) (syntax-local-value/immediate #'box))
          (set-language-box-language! val #'language))]))
 
+; Convenience function for updating current-source and current-target
 (define-syntax (update-current-languages! stx)
   (syntax-parse stx
     [(_ language:id)
@@ -185,10 +189,12 @@
                                                             "src"
                                                             (+ current-language-number)))))]))
 
+; Top level variables that current-source and current-target parameterize over
 (define-syntax current-source-top (language-box #'Lsrc))
 (define-syntax current-target-top (language-box #'Lsrc))
 (define-for-syntax current-language-number 0)
 
+; Varient of define-language that binds current-source and current-target
 (define-syntax (define-language stx)
   (syntax-parse stx
     [(_ name:id rest ...)
@@ -207,6 +213,7 @@
                  [else
                   #'(nanopass:define-language name rest ...)]))]))
 
+; Varient of define-pass that binds current-source and current-target
 (define-syntax (define-pass stx)
   (syntax-parse stx
     [(_ rest ...)
