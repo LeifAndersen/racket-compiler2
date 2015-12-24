@@ -1160,7 +1160,24 @@
                          ((define-syntaxes (y) '6)
                           (begin-for-syntax
                             (define-values (z) '8)))))
-                () ())))))
+                () ()))
+      (check-equal?
+       (current-compile #'(begin
+                            (module foo racket
+                              (#%plain-module-begin
+                               (provide x)
+                               (define x 5)))
+                            (require 'foo)
+                            x))
+       `(begin*
+          (module foo racket (x) ()
+                  (x) ()
+                  ((#%plain-app (primitive void))
+                   (define-values (x) '5))
+                  ()
+                  () ())
+          (#%require 'foo)
+          x)))))
 
 ;; ===================================================================================================
 
@@ -2222,7 +2239,8 @@
                           (,[syntax-level-form] ...)
                           (,submodule-form ...)
                           (,submodule-form* ...))
-                  (define global-env* (set-union global-env (make-global-env id*)))
+                  (define global-env* (hash-union global-env (make-global-env id*)
+                                                  #:combine (lambda (v1 v2) v2)))
                   `(module ,id ,module-path (,id* ...) (,id** ...)
                            (,raw-provide-spec ...)
                            (,raw-require-spec ...)
@@ -2275,7 +2293,24 @@
                        (define-values (0) '5)
                        (#%expression
                         (#%plain-lambda 1 #f (0) (0)
-                                        (begin 1 (#%top 0 0))))))))))
+                                        (begin 1 (#%top 0 0)))))))
+      (check-equal?
+       (current-compile #'(begin
+                            (module foo racket
+                              (#%plain-module-begin
+                               (provide x)
+                               (define x 12)))
+                            (require 'foo)
+                            x))
+       `(program (x) (begin*
+                      (module foo racket (x) ()
+                              (x) ()
+                              ((#%plain-app (primitive 35))
+                               (define-values (0) '12))
+                              ()
+                              () ())
+                      (#%require 'foo)
+                      (#%top 0 0)))))))
 
 ;; ===================================================================================================
 
