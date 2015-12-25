@@ -2345,12 +2345,13 @@
   (Lambda : lambda (e) -> lambda (0)
           [(#%plain-lambda ,eni1 ,boolean (,[binding2] ...) (,[binding3] ...) ,[expr depth])
            (define depth* (+ eni1 (length binding2) depth))
-           (values `(#%plain-lambda ,eni1 ,boolean (,binding2 ...) (,binding3 ...) ,(+ 5
-                                                                                       eni1
-                                                                                       (if boolean 1 0)
-                                                                                       (length binding2)
-                                                                                       (length binding3)
-                                                                                       depth*)
+           (values `(#%plain-lambda ,eni1 ,boolean (,binding2 ...) (,binding3 ...)
+                                    ,(+ 5
+                                        eni1
+                                        (if boolean 1 0)
+                                        (length binding2)
+                                        (length binding3)
+                                        depth*)
                                     ,expr)
                    1)])
   [Binding : binding (e) -> binding (0)]
@@ -2412,7 +2413,7 @@
                           (,[syntax-level-form] ...)
                           (,[submodule-form** depth**] ...)
                           (,[submodule-form* depth*] ...))
-                  (values `(module ,id ,module-path (,id* ...) (,id** ...) ,(apply max '() depth)
+                  (values `(module ,id ,module-path (,id* ...) (,id** ...) ,(apply max 0 depth)
                                    (,raw-provide-spec ...)
                                    (,raw-require-spec ...)
                                    (,module-level-form ...)
@@ -2491,9 +2492,9 @@
                           id
                           (module-path-index-join #f #f #f)
                           (zo:prefix 0 id* '() 'missing)
-                          (RawProvideSpec raw-provide-spec)
-                          (RawRequireSpec raw-require-spec)
-                          (ModuleLevelForm module-level-form)
+                          '() ; (map RawProvideSpec raw-provide-spec)
+                          '() ; (map RawRequireSpec raw-require-spec)
+                          (map ModuleLevelForm module-level-form)
                           '()
                           '()
                           eni
@@ -2502,8 +2503,8 @@
                           #f
                           (hash)
                           '()
-                          (SubmoduleForm submodule-form)
-                          (SubmoduleForm submodule-form*))])
+                          (map SubmoduleForm submodule-form)
+                          (map SubmoduleForm submodule-form*))])
   (GeneralTopLevelForm : general-top-level-form (e) -> * ()
                        [(define-values (,eni ...) ,expr)
                         (zo:def-values (for/list ([i (in-list eni)])
@@ -2704,8 +2705,9 @@
            (compile-compare #'(call-with-current-continuation (lambda (x) 5)))
            (compile-compare #'(begin
                                 (module foo racket
-                                  (provide x)
-                                  (define x 5))
+                                  (#%plain-module-begin
+                                   (provide x)
+                                   (define x 5)))
                                 (require 'foo)
                                 x)))
          all-compiler-tests)))
