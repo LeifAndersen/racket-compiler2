@@ -200,8 +200,10 @@
     [(_ name:id rest ...)
      #:with current-source (format-id stx "current-source")
      #:with current-target (format-id stx "current-target")
-     #`(splicing-let-syntax ([current-source (syntax-local-value #'current-source-top (lambda () #f))]
-                             [current-target (syntax-local-value #'current-target-top (lambda () #f))])
+     #`(splicing-let-syntax ([current-source (syntax-local-value #'current-source-top
+                                                                 (lambda () #f))]
+                             [current-target (syntax-local-value #'current-target-top
+                                                                 (lambda () #f))])
          #,(cond [(free-identifier=? #'name #'current-target)
                   (define-values (val trans) (syntax-local-value/immediate #'current-target-top))
                   (with-syntax ([new-name (format-id stx "~a" trans)])
@@ -219,8 +221,10 @@
     [(_ rest ...)
      #:with current-source (format-id stx "current-source")
      #:with current-target (format-id stx "current-target")
-     #'(splicing-let-syntax ([current-source (syntax-local-value #'current-source-top (lambda () #f))]
-                             [current-target (syntax-local-value #'current-target-top (lambda () #f))])
+     #'(splicing-let-syntax ([current-source (syntax-local-value #'current-source-top
+                                                                 (lambda () #f))]
+                             [current-target (syntax-local-value #'current-target-top
+                                                                 (lambda () #f))])
          (nanopass:define-pass rest ...))]))
 
 ;; ===================================================================================================
@@ -618,8 +622,9 @@
                                [id:id (syntax-e #'id)]
                                [(rename id1:id id2:id) `(rename* ,#'id1 ,#'id2)]
                                [(struct name:id (fields:id ...))
-                                `(struct ,#'name (,(for/list ([f (in-list (syntax->list #'(fields ...)))])
-                                                     (syntax-e f)) ...))]
+                                `(struct ,#'name
+                                   (,(for/list ([f (in-list (syntax->list #'(fields ...)))])
+                                       (syntax-e f)) ...))]
                                [(all-from raw-module-path)
                                 `(all-from-except ,(parse-raw-module-path #'raw-module-path))]
                                [(all-from-except raw-module-path ids:id ...)
@@ -1948,7 +1953,8 @@
                                               (#%plain-lambda (z.2)
                                                               (free (y.1) (x)
                                                                     (#%plain-app
-                                                                     (primitive +) (#%top . x) y.1 z.2)))))))))
+                                                                     (primitive +)
+                                                                     (#%top . x) y.1 z.2)))))))))
       (check-equal?
        (current-compile #'(begin
                             (define x 5)
@@ -2093,7 +2099,8 @@
                                         (free (x.1) ()
                                               (begin
                                                 (set!-boxes (x.1) '6)
-                                                (#%plain-app (primitive +) (#%unbox x.1) y.2)))))))))))
+                                                (#%plain-app (primitive +)
+                                                             (#%unbox x.1) y.2)))))))))))
 
 ;; ===================================================================================================
 
@@ -2185,7 +2192,9 @@
            (define locals (map (var->index env frame global-env) id2))
            `(#%plain-lambda ,(length params)
                             ,rest?
-                            (,(if (= (length binding3) 0) locals (cons (- frame prefix-frame) locals)) ...)
+                            (,(if (= (length binding3) 0)
+                                  locals
+                                  (cons (- frame prefix-frame) locals)) ...)
                             (,(map ((curry dict-ref) global-env) binding3) ...)
                             ,(Expr expr env* frame** global-env frame**))])
   (Expr : expr (e [env '()] [frame 0] [global-env '()] [prefix-frame 0]) -> expr ()
@@ -2222,7 +2231,9 @@
             ,expr)]
         [(#%plain-app ,expr ,expr* ...)
          (define expr1 (Expr expr env (+ frame (length expr*)) global-env prefix-frame))
-         (define expr*1 (map (lambda (e) (Expr e env (+ frame (length expr*)) global-env prefix-frame)) expr*))
+         (define expr*1 (map (lambda (e)
+                               (Expr e env (+ frame (length expr*)) global-env prefix-frame))
+                             expr*))
          `(#%plain-app ,expr1 ,expr*1 ...)])
   (GeneralTopLevelForm : general-top-level-form (e [env '()] [frame 0] [global-env '()])
                        -> general-top-level-form ()
@@ -2255,7 +2266,8 @@
                    -> module-level-form ())
   (CompilationTop : compilation-top (e) -> compilation-top ()
                   [(program (,binding ...) ,top-level-form)
-                   `(program (,binding ...) ,(TopLevelForm top-level-form '() 0 (make-global-env binding) 0))]))
+                   `(program (,binding ...)
+                             ,(TopLevelForm top-level-form '() 0 (make-global-env binding) 0))]))
 
 (splicing-let-syntax ([current-target (syntax-local-value #'current-target-top)])
   (module+ test
@@ -2435,7 +2447,10 @@
       (check-equal?
        (current-compile #'(lambda (x) (let ([y 5]) (+ x y))))
        `(program 1 () (#%expression
-                       (#%plain-lambda 1 #f () () 10 (let-one '5 (#%plain-app (primitive ,(dict-ref primitive-table* '+)) 3 2))))))
+                       (#%plain-lambda 1 #f () () 10
+                                       (let-one '5 (#%plain-app
+                                                    (primitive ,(dict-ref primitive-table* '+))
+                                                    3 2))))))
       (check-equal?
        (current-compile #'(if (= 5 6)
                               (let ([x '5]
