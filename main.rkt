@@ -2276,14 +2276,14 @@
                               (begin
                                 (set!-values 1 0 '5)
                                 (set!-values 1 1 '6)
-                                (#%plain-app (primitive 247) 2 3)))))
+                                (#%plain-app (primitive ,(dict-ref primitive-table* '+)) 2 3)))))
       (check-equal?
        (current-compile #'(begin
                        (define x 5)
                        (+ x 5)))
        `(program (x) (begin*
                        (define-values (0) '5)
-                       (#%plain-app (primitive 247) (#%top 2 0) '5))))
+                       (#%plain-app (primitive ,(dict-ref primitive-table* '+)) (#%top 2 0) '5))))
       (check-equal?
        (current-compile #'(begin
                        (define x 5)
@@ -2435,7 +2435,7 @@
       (check-equal?
        (current-compile #'(lambda (x) (let ([y 5]) (+ x y))))
        `(program 1 () (#%expression
-                       (#%plain-lambda 1 #f () () 10 (let-one '5 (#%plain-app (primitive 247) 3 2))))))
+                       (#%plain-lambda 1 #f () () 10 (let-one '5 (#%plain-app (primitive ,(dict-ref primitive-table* '+)) 3 2))))))
       (check-equal?
        (current-compile #'(if (= 5 6)
                               (let ([x '5]
@@ -2443,7 +2443,7 @@
                                 y)
                               (let ([x '6])
                                 x)))
-       `(program 2 () (if (#%plain-app (primitive 256) '5 '6)
+       `(program 2 () (if (#%plain-app (primitive ,(dict-ref primitive-table* '=)) '5 '6)
                           (let-void 2
                                     (begin
                                       (set!-values 1 0 '5)
