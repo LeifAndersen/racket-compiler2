@@ -23,6 +23,7 @@
          racket/splicing
          compiler/zo-marshal
          syntax/toplevel
+         syntax/strip-context
          rackunit
          (prefix-in zo: compiler/zo-structs)
          (rename-in racket/base
@@ -119,8 +120,12 @@
        #`(test-case "Test case for finished compiler"
            #,(syntax/loc stx
                (check-equal?
-                (eval (compile expression))
-                (eval expression))))]))
+                (parameterize ([current-namespace (make-base-namespace)])
+                  (eval (compile (namespace-syntax-introduce
+                                  (strip-context expression)))))
+                (parameterize ([current-namespace (make-base-namespace)])
+                  (eval (namespace-syntax-introduce
+                         (strip-context expression)))))))]))
 
   ;; Used to update the current compiler while testing
   (define current-compile-number 0)
@@ -2714,15 +2719,15 @@
                                     (variable-reference->namespace
                                      (#%variable-reference))))
            (compile-compare #'(begin
-                                (define x 5)
+                                (define x 48)
                                 (let ([x 6])
                                   (#%top . x))))
-           (compile-compare #'(call-with-current-continuation (lambda (x) 5)))
+           (compile-compare #'(call-with-current-continuation (lambda (x) 12)))
            (compile-compare #'(begin
                                 (module foo racket
                                   (#%plain-module-begin
                                    (provide x)
-                                   (define x 5)))
+                                   (define x 481)))
                                 (require 'foo)
                                 x)))
          all-compiler-tests)))
