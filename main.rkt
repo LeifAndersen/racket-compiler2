@@ -27,7 +27,8 @@
          rackunit
          (prefix-in zo: compiler/zo-structs)
          (rename-in racket/base
-                    [compile base:compile])
+                    [compile base:compile]
+                    [current-compile base:current-compile])
          (for-syntax racket/base
                      syntax/parse
                      racket/syntax
@@ -108,7 +109,7 @@
   ;; Run all tests defined with define-compiler-test
   (define-syntax-rule (run-all-compiler-tests)
     (let ()
-      (define res (map run-tests all-compiler-tests))
+      (define res (map run-tests (reverse all-compiler-tests)))
       (exit-handler (lambda (code)
                       (max code (min (apply + res) 255))))
       (void)))
@@ -2653,84 +2654,87 @@
                      [,path (void)]))
 
 (module+ test
-  (set! all-compiler-tests
-        (cons
-         (test-suite
-             "Tests for finished compiler"
-           (compile-compare #'42)
-           (compile-compare #'(if #t 5 6))
-           (compile-compare #'((lambda (x) x) 42))
-           (compile-compare #'((lambda (x) (+ x 5)) 84))
-           (compile-compare #'(((lambda (x) (lambda (y) (+ x y))) 2) 3))
-           (compile-compare #'((lambda x (car x)) '(84 91 514)))
-           (compile-compare #'(let ([x (lambda () 42)])
-                                (x)))
-           (compile-compare #'(let ([x 5])
-                                (set! x 6)
-                                x))
-           (compile-compare #'(letrec ([f (lambda (x) x)])
-                                (f 12)))
-           (compile-compare #'(letrec ([fact (lambda (x)
-                                               (if (x . <= . 0)
-                                                   1
-                                                   (* x (fact (- x 1)))))])
-                                (fact 5)))
-           (compile-compare #'(with-continuation-mark 'hello 'world
-                                (continuation-mark-set->list
-                                 (current-continuation-marks) 'hello)))
-           (compile-compare #'(if (= 4 4)
-                                  (begin
-                                    (random 1)
-                                    4)
-                                  3))
-           (compile-compare #'(let ([+ 12])
-                                (- + 8)))
-           (compile-compare #'(begin0 12 42 (+ 3 8)))
-           (compile-compare #'(begin
-                                (define x 5)
-                                x))
-           (compile-compare #'(begin
-                                (define x 5)
-                                (set! x 6)
-                                x))
-           (compile-compare #'(begin
-                                (define x 5)
-                                (let ([b (lambda (y) (+ x y))])
-                                  (b 12))))
-           (compile-compare #'(begin
-                                (define x 5)
-                                ((lambda (y)
-                                   ((lambda (z)
-                                      (+ x y z)) 4)) 5)))
-           (compile-compare #'(begin
-                                (define x 5)
-                                (((let ([a (lambda (y)
-                                             (let ([b (lambda (z)
-                                                        (+ x y z))])
-                                               b))])
-                                    a) 3) 4)))
-           (compile-compare #'(begin
-                                (define x 5)
-                                (let ([y 6])
-                                  (set! x (+ x 1))
-                                  (set! y (+ y 1))
-                                  (+ x y))))
-           (compile-compare #'(eval '(+ 1 2)
-                                    (variable-reference->namespace
-                                     (#%variable-reference))))
-           (compile-compare #'(begin
-                                (define x 48)
-                                (let ([x 6])
-                                  (#%top . x))))
-           (compile-compare #'(call-with-current-continuation (lambda (x) 12)))
-           (compile-compare #'(begin
-                                (module foo racket
-                                  (#%plain-module-begin
-                                   (provide x)
-                                   (define x 481)))
-                                (require 'foo)
-                                x)))
-         all-compiler-tests)))
+  (parameterize ({current-environment-variables
+                  (environment-variables-copy (current-environment-variables))})
+    (putenv "PLT_VALIDATE_COMPILE" "true")
+    (set! all-compiler-tests
+          (cons
+           (test-suite
+               "Tests for finished compiler"
+             (compile-compare #'42)
+             (compile-compare #'(if #t 5 6))
+             (compile-compare #'((lambda (x) x) 42))
+             (compile-compare #'((lambda (x) (+ x 5)) 84))
+             (compile-compare #'(((lambda (x) (lambda (y) (+ x y))) 2) 3))
+             (compile-compare #'((lambda x (car x)) '(84 91 514)))
+             (compile-compare #'(let ([x (lambda () 42)])
+                                  (x)))
+             (compile-compare #'(let ([x 5])
+                                  (set! x 6)
+                                  x))
+             (compile-compare #'(letrec ([f (lambda (x) x)])
+                                  (f 12)))
+             (compile-compare #'(letrec ([fact (lambda (x)
+                                                 (if (x . <= . 0)
+                                                     1
+                                                     (* x (fact (- x 1)))))])
+                                  (fact 5)))
+             (compile-compare #'(with-continuation-mark 'hello 'world
+                                  (continuation-mark-set->list
+                                   (current-continuation-marks) 'hello)))
+             (compile-compare #'(if (= 4 4)
+                                    (begin
+                                      (random 1)
+                                      4)
+                                    3))
+             (compile-compare #'(let ([+ 12])
+                                  (- + 8)))
+             (compile-compare #'(begin0 12 42 (+ 3 8)))
+             (compile-compare #'(begin
+                                  (define x 5)
+                                  x))
+             (compile-compare #'(begin
+                                  (define x 5)
+                                  (set! x 6)
+                                  x))
+             (compile-compare #'(begin
+                                  (define x 5)
+                                  (let ([b (lambda (y) (+ x y))])
+                                    (b 12))))
+             (compile-compare #'(begin
+                                  (define x 5)
+                                  ((lambda (y)
+                                     ((lambda (z)
+                                        (+ x y z)) 4)) 5)))
+             (compile-compare #'(begin
+                                  (define x 5)
+                                  (((let ([a (lambda (y)
+                                               (let ([b (lambda (z)
+                                                          (+ x y z))])
+                                                 b))])
+                                      a) 3) 4)))
+             (compile-compare #'(begin
+                                  (define x 5)
+                                  (let ([y 6])
+                                    (set! x (+ x 1))
+                                    (set! y (+ y 1))
+                                    (+ x y))))
+             (compile-compare #'(eval '(+ 1 2)
+                                      (variable-reference->namespace
+                                       (#%variable-reference))))
+             (compile-compare #'(begin
+                                  (define x 48)
+                                  (let ([x 6])
+                                    (#%top . x))))
+             (compile-compare #'(call-with-current-continuation (lambda (x) 12)))
+             (compile-compare #'(begin
+                                  (module foo racket
+                                    (#%plain-module-begin
+                                     (provide x)
+                                     (define x 481)))
+                                  (require 'foo)
+                                  x)))
+           all-compiler-tests))))
 
 ;; ===================================================================================================
 
