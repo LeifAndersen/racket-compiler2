@@ -122,9 +122,11 @@
            #,(syntax/loc stx
                (check-equal?
                 (parameterize ([current-namespace (make-base-namespace)])
+                  (namespace-require 'racket/undefined)
                   (eval (compile (namespace-syntax-introduce
                                   (strip-context expression)))))
                 (parameterize ([current-namespace (make-base-namespace)])
+                  (namespace-require 'racket/undefined)
                   (eval (namespace-syntax-introduce
                          (strip-context expression)))))))]))
 
@@ -2513,8 +2515,8 @@
                           id
                           (module-path-index-join #f #f #f)
                           (zo:prefix 0 id* '() 'missing)
-                          '() ; (map RawProvideSpec raw-provide-spec)
-                          '() ; (map RawRequireSpec raw-require-spec)
+                          (map RawProvideSpec raw-provide-spec)
+                          (map RawRequireSpec raw-require-spec)
                           (map ModuleLevelForm module-level-form)
                           '()
                           '()
