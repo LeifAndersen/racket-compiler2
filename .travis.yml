@@ -54,6 +54,8 @@ before_script:
 script:
  - raco pkg install --deps search-auto
  - raco test -x -p racket-compiler2
+ - raco pkg install --deps search-auto doc-coverage
+ - raco doc-coverage main.rkt
 
 after_success:
   - raco setup --check-deps zordoz
