@@ -7,4 +7,11 @@
 
 @defmodule[compiler2]
 
-Package Description Here
+This is an unstable package for a variant of the Racket compiler written in
+Racket using Nanopass.
+It is not currently stable enough for most uses.
+
+@defproc[(compiler [stx syntax?]) compilation-top?]{
+The replacement compiler. Note that to use it, you must make sure to set
+@racket[current-compile] to be this compiler.
+}
