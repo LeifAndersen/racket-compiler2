@@ -167,9 +167,10 @@
 (define-syntax (set-language! stx)
   (syntax-parse stx
     [(_ box language)
-     #'(begin-for-syntax
+     (syntax/loc stx
+       (begin-for-syntax
          (define-values (val trans) (syntax-local-value/immediate #'box))
-         (set-language-box-language! val #'language))]))
+         (set-language-box-language! val #'language)))]))
 
 ; Convenience function for updating current-source and current-target
 (define-syntax (update-current-languages! stx)
@@ -321,7 +322,7 @@
                         (planet string1
                                 (string2 string3 string* ...))
                         path)
-  (raw-provide-spec(raw-provide-spec rps)
+  (raw-provide-spec (raw-provide-spec rps)
                     phaseless-prov-spec
                     (for-meta* phase-level phaseless-prov-spec)
                     (protect raw-provide-spec))
@@ -332,8 +333,7 @@
                        (all-from-except raw-module-path id ...)
                        (all-defined-except id ...)
                        (prefix-all-defined-except id id* ...)
-                       (protect* phaseless-prov-spec ...)
-                       (expand (id . datum))))
+                       (protect* phaseless-prov-spec ...)))
 
 ;; Parse and alpha-rename expanded program
 (define-pass parse-and-rename : * (form) -> current-target ()
@@ -654,9 +654,7 @@
                                      (syntax-e i)) ...)]
                                [(protect spec ...)
                                 `(protect* ,(for/list ([s (in-list (syntax->list #'(spec ...)))])
-                                             (parse-phaseless-prov-spec s)) ...)]
-                               [(expand (id:id . datum))
-                                `(expand (,(syntax-e #'id) . ,(syntax-e #'datum)))]))
+                                             (parse-phaseless-prov-spec s)) ...)]))
 
   (parse-top form initial-env))
 
@@ -1191,6 +1189,77 @@
                   () ())
           (#%require 'foo)
           x)))))
+
+;; ===================================================================================================
+
+(update-current-languages! L)
+
+(define-language current-target
+  (extends current-source)
+  (raw-require-spec (raw-require-spec rrs)
+                    (- phaseless-req-spec
+                       (just-meta phase-level raw-require-spec ...)))
+  (phaseless-req-spec (phaseless-req-spec)
+                      (- (only raw-module-path id ...)
+                         (all-except raw-module-path id ...)
+                         (prefix-all-except id raw-module-path id* ...)))
+  (raw-provide-spec (raw-provide-spec rps)
+                    (- phaseless-prov-spec
+                       (for-meta* phase-level phaseless-prov-spec)
+                       (protect raw-provide-spec))
+                    (+ (for-meta* phase-level phaseless-prov-spec ...)))
+  (phaseless-prov-spec (phaseless-prov-spec)
+                       (- (all-from-except raw-module-path id ...)
+                          (all-defined-except id ...)
+                          (struct id (id* ...))
+                          (prefix-all-defined-except id id* ...)
+                          (protect* phaseless-prov-spec ...))
+                       (+ (protect id)
+                          (protect-rename* id1 id2))))
+
+(define-pass scrub-require-provide : current-source (e) -> current-target ()
+  (RawRequireSpec : raw-require-spec (e) -> raw-require-spec ())
+  (PhaselessReqSpec : phaseless-req-spec (e) -> phaseless-req-spec ())
+  (RawProvideSpec : raw-provide-spec (e [protected? #f]) -> raw-provide-spec ()
+                  [,phaseless-prov-spec
+                   `(for-meta* 0 ,(PhaselessProvSpec phaseless-prov-spec protected?) ...)]
+                  [(protect ,[raw-provide-spec #t -> raw-provide-spec])
+                   raw-provide-spec])
+ (PhaselessProvSpec : phaseless-prov-spec (e [protected? #f]) -> * ()
+                    [,id
+                     (with-output-language (current-target phaseless-prov-spec)
+                       (if protected?
+                           (list `(protect ,id))
+                           (list id)))]
+                     [(rename* ,id1 ,id2)
+                      (list `(rename* ,id1 ,id2))]
+                     [(struct ,id (,id* ...))
+                      (list)] ;; TODO
+                     [(all-from-except ,raw-module-path ,id ...)
+                      (list)] ;; TODO
+                     [(all-defined-except ,id ...)
+                      (list)] ;; TODO
+                     [(prefix-all-defined-except ,id ,id* ...)
+                      (list)] ;; TODO
+                     [(protect* ,phaseless-prov-spec ...)
+                      (append
+                       (for/list ([pps (in-list phaseless-prov-spec)])
+                         (PhaselessProvSpec pps #t)))]))
+
+(splicing-let-syntax ([current-target (syntax-local-value #'current-target-top)])
+  (module+ test
+    (update-current-compile!)
+    (define-compiler-test current-target top-level-form
+      (check-equal?
+       (current-compile #'(module foo racket
+                            (#%plain-module-begin
+                             (provide x)
+                             (define x 5))))
+       `(module foo racket (x) ()
+          ((for-meta* 0 x)) ()
+          ((#%plain-app (primitive void))
+           (define-values (x) '5))
+          () () ())))))
 
 ;; ===================================================================================================
 
@@ -2329,7 +2398,7 @@
                                (define-values (0) '12))
                               ()
                               () ())
-                      (#%require 'foo)
+                      (#%require (for-meta 0 'foo))
                       (#%top 0 0)))))))
 
 ;; ===================================================================================================
@@ -2607,38 +2676,20 @@
                    eni4
                    (Expr expr))])
   (RawProvideSpec : raw-provide-spec (e) -> * ()
-                  [(for-meta* ,phase-level ,phaseless-prov-spec)
-                   (void)]
-                  [(protect ,raw-provide-spec)
+                  [(for-meta* ,phase-level ,phaseless-prov-spec ...)
                    (void)])
   (PhaselessProvSpec : phaseless-prov-spec (e) -> * ()
                      [,id (void)]
                      [(rename* ,id1 ,id2)
                       (void)]
-                     [(struct ,id (,id* ...))
+                     [(protect ,id)
                       (void)]
-                     [(all-from-except ,raw-module-path ,id ...)
-                      (void)]
-                     [(all-defined-except ,id ...)
-                      (void)]
-                     [(prefix-all-defined-except ,id ,id* ...)
-                      (void)]
-                     [(protect* ,phaseless-prov-spec ...)
-                      (void)]
-                     [(expand (,id . ,datum))
+                     [(protect-rename* ,id1 ,id2)
                       (void)])
   (RawRequireSpec : raw-require-spec (e) -> * ()
                   [(for-meta ,phase-level ,phaseless-req-spec ...)
-                   (void)]
-                  [(just-meta ,phase-level ,raw-require-spec ...)
                    (void)])
   (PhaselessReqSpec : phaseless-req-spec (e) -> * ()
-                    [(only ,raw-module-path ,id ...)
-                     (void)]
-                    [(all-except ,raw-module-path ,id ...)
-                     (void)]
-                    [(prefix-all-except ,id ,raw-module-path ,id* ...)
-                     (void)]
                     [(rename ,raw-module-path ,id1 ,id2)
                      (void)])
   (RawModulePath : raw-module-path (e) -> * ()
@@ -2784,6 +2835,7 @@
   lift-require-provide
   lift-syntax-sequences
   identify-module-variables
+  scrub-require-provide
   make-begin-explicit
   identify-assigned-variables
   purify-letrec
