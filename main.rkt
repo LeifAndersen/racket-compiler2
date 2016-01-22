@@ -203,6 +203,17 @@
 (define-syntax current-target-top (language-box #'Lsrc))
 (define-for-syntax current-language-number 0)
 
+; Construct a compiler component
+(define-syntax (define-compiler-component stx)
+  (syntax-parse stx
+    [(_ name:id)
+     #'(define name '())]))
+
+; Add a compiler pass to a component
+;  (to be used by define-language)
+(define (add-pass-to-component! component pass)
+  (set! component (append component (list pass))))
+
 ; Varient of define-language that binds current-source and current-target
 (define-syntax (define-language stx)
   (syntax-parse stx
@@ -227,14 +238,14 @@
 ; Varient of define-pass that binds current-source and current-target
 (define-syntax (define-pass stx)
   (syntax-parse stx
-    [(_ rest ...)
+    [(_ name:id rest ...)
      #:with current-source (format-id stx "current-source")
      #:with current-target (format-id stx "current-target")
      #'(splicing-let-syntax ([current-source (syntax-local-value #'current-source-top
                                                                  (lambda () #f))]
                              [current-target (syntax-local-value #'current-target-top
                                                                  (lambda () #f))])
-         (nanopass:define-pass rest ...))]))
+         (nanopass:define-pass name rest ...))]))
 
 ;; ===================================================================================================
 
@@ -1218,11 +1229,34 @@
                           (protect-rename* id1 id2))))
 
 (define-pass scrub-require-provide : current-source (e) -> current-target ()
-  (RawRequireSpec : raw-require-spec (e) -> raw-require-spec ())
-  (PhaselessReqSpec : phaseless-req-spec (e) -> phaseless-req-spec ())
+  (definitions
+    (define not-projected
+      (block
+       (struct not-projected ())
+       (not-projected)))
+    (define (projected? p)
+      (not (equal? p not-projected))))
+  (RawRequireSpec : raw-require-spec (e [project not-projected]) -> raw-require-spec ()
+                  [(for-meta ,phase-level ,phaseless-req-spec)
+                   `(for-meta ,phase-level ,(if (equal? project phase-level)
+                                                (PhaselessReqSpec phaseless-req-spec project)
+                                                null) ...)])
+  (PhaselessReqSpec : phaseless-req-spec (e [project not-projected]) -> * ()
+                    [,raw-module-path
+                     (list)] ;; TODO
+                    [(only ,raw-module-path ,id ...)
+                     (list)] ;; TODO
+                    [(all-except ,raw-module-path ,id* ...)
+                     (list)] ;; TODO
+                    [(prefix-all-except ,id ,raw-module-path ,id* ...)
+                     (list)] ;; TODO
+                    [(rename ,raw-module-path ,id1 ,id2)
+                     (list)]) ;; TODO
   (RawProvideSpec : raw-provide-spec (e [protected? #f]) -> raw-provide-spec ()
                   [,phaseless-prov-spec
                    `(for-meta* 0 ,(PhaselessProvSpec phaseless-prov-spec protected?) ...)]
+                  [(for-meta* ,phase-level ,phaseless-prov-spec)
+                   `(for-meta* ,phase-level ,(PhaselessProvSpec phaseless-prov-spec protected?))]
                   [(protect ,[raw-provide-spec #t -> raw-provide-spec])
                    raw-provide-spec])
  (PhaselessProvSpec : phaseless-prov-spec (e [protected? #f]) -> * ()
@@ -1250,6 +1284,13 @@
   (module+ test
     (update-current-compile!)
     (define-compiler-test current-target top-level-form
+      (check-equal?
+       (current-compile #'(begin
+                            (require racket/list)
+                            rest))
+       `(begin*
+          (#%require (for-meta 0 racket/list))
+          rest))
       (check-equal?
        (current-compile #'(module foo racket
                             (#%plain-module-begin
@@ -2791,17 +2832,34 @@
 
 ;; ===================================================================================================
 
+(begin-for-syntax
+  (define-syntax-class pass
+    (pattern name:id
+             #:attr [components 1] '())
+    (pattern (name:id components:id ...))))
+
 (define-syntax (define-compiler stx)
   (syntax-parse stx
-    [(_ name:id passes* ...+)
-    #:with compilers (format-id stx "compilers")
-     (define passes (reverse (syntax->list #'(passes* ...))))
-     #`(begin (define name (compose #,@passes))
+    [(_ name:id passes:pass ...+)
+     #:with compilers (format-id stx "compilers")
+     (define pass-names (reverse (syntax->list #'(passes.name ...))))
+     (define pass-components (reverse (syntax->list #'((passes.components ...) ...))))
+     ;; Bind the compiler name to the compiler.
+     #`(begin (define name (compose #,@pass-names))
+
+              ;; Add each of the pass to there respective components
+              #,@(for/list ([pn (in-list pass-names)]
+                            (pc (in-list pass-components)))
+                   #`(begin
+                       #,@(for/list ([pc* (in-list (syntax->list pc))])
+                            #`(add-pass-to-component! #,pc* #,pn))))
+
+              ;; Create intermediate compilers for use in test casses
               (module* test-compiler-bindings #f
                 (provide (all-defined-out))
                 (define compilers null)
-                #,@(let build-partial-compiler ([passes passes]
-                                                [pass-count (length passes)])
+                #,@(let build-partial-compiler ([passes pass-names]
+                                                [pass-count (length pass-names)])
                      (if (= pass-count 0)
                          '()
                          (with-syntax ([name* (format-id stx "~a/~a" #'name (- pass-count 1))])
@@ -2828,27 +2886,35 @@
     (with-input-from-bytes zo
       (lambda () (read)))))
 
+(define-compiler-component closure-conversion)
+(define-compiler-component inline)
+(define-compiler-component mutable-variable-elimination)
+(define-compiler-component debruijn)
+(define-compiler-component parse)
+(define-compiler-component generate-bytecode)
+(define-compiler-component modules)
+
 (define-compiler compile
   expand-syntax*
-  parse-and-rename
-  lift-submodules
-  lift-require-provide
-  lift-syntax-sequences
-  identify-module-variables
-  scrub-require-provide
-  make-begin-explicit
-  identify-assigned-variables
+  (parse-and-rename parse)
+  (lift-submodules modules)
+  (lift-require-provide modules)
+  (lift-syntax-sequences modules)
+  (identify-module-variables modules)
+  (scrub-require-provide modules)
+  (make-begin-explicit parse)
+  (identify-assigned-variables mutable-variable-elimination)
   purify-letrec
   optimize-direct-call
-  convert-assignments
-  uncover-free
+  (convert-assignments mutable-variable-elimination)
+  (uncover-free closure-conversion)
   raise-toplevel-variables
   closurify-letrec
   void-lets
-  debruijn-indices
-  find-let-depth
-  generate-zo-structs
-  zo-marshal
+  (debruijn-indices debruijn)
+  (find-let-depth debruijn)
+  (generate-zo-structs generate-bytecode)
+  (zo-marshal generate-bytecode)
   bytes->compiled-expression)
 
 (module+ test
