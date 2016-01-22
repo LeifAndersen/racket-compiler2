@@ -203,16 +203,21 @@
 (define-syntax current-target-top (language-box #'Lsrc))
 (define-for-syntax current-language-number 0)
 
+(struct compiler-component (passes)
+  #:mutable
+  #:transparent) ;; TODO: Remove, for debugging
+
 ; Construct a compiler component
 (define-syntax (define-compiler-component stx)
   (syntax-parse stx
     [(_ name:id)
-     #'(define name '())]))
+     #'(define name (compiler-component '()))]))
 
 ; Add a compiler pass to a component
 ;  (to be used by define-language)
+;  (Adds back to front)
 (define (add-pass-to-component! component pass)
-  (set! component (append component (list pass))))
+  (set-compiler-component-passes! component (cons pass (compiler-component-passes component))))
 
 ; Varient of define-language that binds current-source and current-target
 (define-syntax (define-language stx)
