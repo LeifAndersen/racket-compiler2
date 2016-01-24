@@ -33,7 +33,8 @@
                      syntax/parse
                      racket/syntax
                      racket/stxparam
-                     racket/stxparam-exptime))
+                     racket/stxparam-exptime)
+         "private/utils.rkt")
 
 (require/expose compiler/decompile (primitive-table))
 
