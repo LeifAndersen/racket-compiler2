@@ -1,7 +1,9 @@
 #lang racket/base
 
 (provide define-language
-         define-pass)
+         define-pass
+         define-compiler-component
+         add-pass-to-component!)
 
 (require (except-in nanopass/base
                     define-language
@@ -68,3 +70,27 @@
                              [current-target (syntax-local-value #'current-target-top
                                                                  (lambda () #f))])
          (nanopass:define-pass name rest ...))]))
+
+; Representation of a compiler component
+(struct compiler-component (passes)
+  #:mutable
+  #:transparent) ;; TODO: Remove, for debugging
+
+; Construct a compiler component
+(define-syntax (define-compiler-component stx)
+  (syntax-parse stx
+    [(_ name:id)
+     #'(define name (compiler-component '()))]))
+
+; Add a compiler pass to a component
+;  (to be used by define-language)
+;  (Adds back to front)
+(define (add-pass-to-component! component pass)
+  (set-compiler-component-passes! component (cons pass (compiler-component-passes component))))
+
+(begin-for-syntax
+  (define-syntax-class pass
+    (pattern name:id
+             #:attr [components 1] '())
+    (pattern (name:id components:id ...))))
+
