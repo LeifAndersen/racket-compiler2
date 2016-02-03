@@ -4,7 +4,11 @@
          define-pass
          define-compiler-component
          add-pass-to-component!
-         define-compiler)
+         define-compiler
+         update-current-languages!
+         start-current-language!
+         current-source-top
+         current-target-top)
 
 (require (except-in nanopass/base
                     define-language
@@ -12,32 +16,76 @@
          (rename-in nanopass/base
                     [define-language nanopass:define-language]
                     [define-pass nanopass:define-pass])
-         syntax/parse
-         racket/match
-         racket/set
-         racket/dict
-         racket/hash
-         racket/port
-         racket/list
-         racket/function
-         racket/bool
-         racket/stxparam
-         racket/stxparam-exptime
-         racket/block
          racket/splicing
-         compiler/zo-marshal
-         syntax/toplevel
-         syntax/strip-context
-         rackunit
-         (prefix-in zo: compiler/zo-structs)
          (rename-in racket/base
                     [compile base:compile]
                     [current-compile base:current-compile])
          (for-syntax racket/base
                      syntax/parse
-                     racket/syntax
-                     racket/stxparam
-                     racket/stxparam-exptime))
+                     racket/syntax))
+
+; Language box, for creating current-source and current-target
+(begin-for-syntax
+  (struct language-box (language)
+    #:mutable
+    #:transparent
+    #:property prop:rename-transformer
+    (lambda (inst)
+      (syntax-property (language-box-language inst)
+                       'not-free-identifier=?
+                       #t))))
+
+; Macro used for setting langauge-box
+(define-syntax (set-language! stx)
+  (syntax-parse stx
+    [(_ box language)
+     (syntax/loc stx
+       (begin-for-syntax
+         (define-values (val trans) (syntax-local-value/immediate #'box))
+         (set-language-box-language! val #'language)))]))
+
+(define-syntax (start-current-language! stx)
+  (syntax-parse stx
+    [(_ language:id)
+     #`(begin-for-syntax
+         (define-values (val trans) (syntax-local-value/immediate #'current-source-top))
+         (define-values (val* trans*) (syntax-local-value/immediate #'current-target-top))
+         (set-current-language-number! 0)
+         (set-language-box-language! val #'#,(format-id stx "~a~a" #'language "src"))
+         (set-language-box-language! val* #'#,(format-id stx "~a~a" #'language "src")))]))
+
+; Convenience function for updating current-source and current-target
+(define-syntax (update-current-languages! stx)
+  (syntax-parse stx
+    [(_ language:id)
+     #`(begin-for-syntax
+         (define-values (val trans) (syntax-local-value/immediate #'current-source-top))
+         (define-values (val* trans*) (syntax-local-value/immediate #'current-target-top))
+         (set-current-language-number! (+ current-language-number 1))
+         (set-language-box-language! val #'#,(format-id stx "~a~a" #'language
+                                                      (if (= current-language-number 0)
+                                                          "src"
+                                                          current-language-number)))
+         (set-language-box-language! val* #'#,(format-id stx "~a~a" #'language
+                                                       (if (= (+ current-language-number 1) 0)
+                                                           "src"
+                                                           (+ current-language-number 1)))))
+     #;#`(begin
+         (set-language! current-source-top #,(format-id stx "~a~a" #'language
+                                                        (if (= current-language-number 0)
+                                                            "src"
+                                                            current-language-number)))
+         (set-language! current-target-top #,(format-id stx "~a~a" #'language
+                                                        (if (= (+ current-language-number 1) 0)
+                                                            "src"
+                                                            (+ current-language-number)))))]))
+
+; Top level variables that current-source and current-target parameterize over
+(define-syntax current-source-top (language-box #'missing))
+(define-syntax current-target-top (language-box #'missing))
+(define-for-syntax current-language-number 0)
+(define-for-syntax (set-current-language-number! num)
+  (set! current-language-number num))
 
 ; Varient of define-language that binds current-source and current-target
 (define-syntax (define-language stx)
