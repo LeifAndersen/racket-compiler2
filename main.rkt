@@ -1505,14 +1505,16 @@
            (letrec-values ([(id ...) expr1] ...)
              abody)
            (set! id expr))
-        (+ (undefined)
+        (+ set-expr
+           (undefined)
            (let ([id expr1] ...)
              set-abody)
            (letrec ([id lambda] ...)
-             expr)
-           (set!-values (id ...) expr)))
+             expr)))
+  (set-expr (set-expr)
+            (+ (set!-values (id ...) expr)))
   (set-abody (set-abody)
-             (+ (begin-set! expr ... abody))))
+             (+ (begin-set! set-expr ... abody))))
 
 (define-pass purify-letrec : current-source (e) -> current-target ()
   (Expr : expr (e) -> expr ()
@@ -1630,18 +1632,22 @@
 (define-language current-target
   (extends current-source)
   (expr (expr)
-        (- (let ([id expr1] ...)
+        (- set-expr
+           (let ([id expr1] ...)
              set-abody))
         (+ (let ([id expr1] ...)
              expr)
            (#%unbox id)
            (#%box id)
+           (set!-values (id ...) expr)
            (set!-boxes (id ...) expr)))
   (lambda (lambda)
     (- (#%plain-lambda formals abody))
     (+ (#%plain-lambda formals expr)))
   (set-abody (set-abody)
-             (- (begin-set! expr ... abody)))
+             (- (begin-set! set-expr ... abody)))
+  (set-expr (set-expr)
+            (- (set!-values (id ...) expr)))
   (assigned-body (abody)
                  (- (assigned (id ...) expr))))
 
@@ -1678,18 +1684,18 @@
   [Expr : expr (e [env '()] [boxes? #t]) -> expr ()
         [(let ([,id ,[expr]] ...)
            (begin-set!
-             ,expr** ...
+             ,set-expr ...
              (assigned (,id* ...) ,expr*)))
          (cond [(null? id) (Expr expr* env #t)]
                [else (define env* (extend-env env id*))
                      (define let* (build-let id* (map (lookup-env env*) id*)
                                              (Expr expr* env* #t)))
-                     (if (= (length expr**) 0)
+                     (if (= (length set-expr) 0)
                          `(let ([,(map (lookup-env env*) id) ,expr] ...)
                             ,let*)
                          `(let ([,(map (lookup-env env*) id) ,expr] ...)
                             (begin
-                              ,(for/list ([e (in-list expr**)])
+                              ,(for/list ([e (in-list set-expr)])
                                  (Expr e env* #f)) ...
                               ,let*)))])]
         [,id
