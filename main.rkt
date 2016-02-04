@@ -724,7 +724,7 @@
              ('12) () ()))
           ((module baz racket/base
              ('1) () ()))))
-      #;(check-equal?    TODO, this test is currently causing build errors.
+      (check-equal?
        (current-compile #'(module outer racket
                             (#%plain-module-begin
                              (begin-for-syntax
