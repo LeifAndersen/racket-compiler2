@@ -1472,6 +1472,51 @@
 (module+ test
   (update-current-compile!))
 
+(define-pass inline-expressions : current-target (e) -> current-target ()
+  (definitions
+    (define (simple? e)
+      (nanopass-case (current-target expr) e
+                     [(quote ,datum) #t]
+                     [,id #t]
+                     [,lambda #t]
+                     [(primitive ,id) #t]
+                     [else #f]))
+    (define (make-begin e1 e2)
+      (define e1* (filter simple? e1))
+      (cond [(null? e1*) e2]
+            [else
+             (with-output-language (current-target expr)
+               (nanopass-case (current-target expr) e2
+                              [(begin ,expr3 ... ,expr4)
+                               `(begin ,(append e1* expr3) ,expr4)]
+                              [else `(begin ,e1* ,e2)]))]))
+    (define (result-exp e)
+      (void)) ;; TODO
+    (define (app? context)
+      (void)) ;; TODO
+    (define (inline-ref id context env)
+      (void))) ;; TODO
+  (Expr : expr (e context env) -> expr ()
+        [(quote ,datum) `(quote ,datum)]
+        [,id (inline-ref id context env)]
+        [(begin ,[expr1 'effect env -> expr1] ... ,[expr2 context env -> expr2])
+         (make-begin expr1 expr2)]
+        [(if ,[expr1 'test env -> expr1] ,expr2 ,expr3)
+         (nanopass-case (current-target expr) (result-exp expr1)
+                        [(quote ,datum)
+                         (make-begin expr1
+                                     (inline-expressions `(if ,datum ,expr2 ,expr3)
+                                                         context
+                                                         env))]
+                        [else
+                         (define context* (if (app? context) 'value context))
+                         (define expr2* (inline-expressions expr2 context* env))
+                         (define expr3* (inline-expressions expr3 context* env))
+                         (if (equal? expr2* expr3*)
+                             (make-begin expr1 expr2*)
+                             `(if ,expr1 ,expr2* ,expr3*))])])
+  (Expr e null null))
+
 (define-pass optimize-direct-call : current-target (e) -> current-target ()
   (Expr : expr (e) -> expr ()
         [(#%plain-app (#%plain-lambda (,id ...) ,[abody])
