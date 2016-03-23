@@ -10,7 +10,15 @@
          current-source-top
          current-target-top
          primitive-identifier?
-         primitive->symbol)
+         primitive->symbol
+         primitive-table*
+         maybe-module-path?
+         phase-level?
+         declaration-keyword?
+         datum?
+         (struct-out variable)
+         make-variable
+         current-variable-equal?)
 
 (require (except-in nanopass/base
                     define-language
@@ -19,12 +27,15 @@
                     [define-language nanopass:define-language]
                     [define-pass nanopass:define-pass])
          racket/splicing
+         rackunit
          (rename-in racket/base
                     [compile base:compile]
                     [current-compile base:current-compile])
          (for-syntax racket/base
                      syntax/parse
                      racket/syntax))
+
+(require/expose compiler/decompile (primitive-table))
 
 ; Language box, for creating current-source and current-target
 (begin-for-syntax
@@ -195,3 +206,39 @@
 (define (primitive->symbol identifier)
   (define binding (identifier-binding identifier))
   (cadr binding))
+
+(define primitive-table*
+  (for/hash ([(k v) (in-hash primitive-table)])
+    (values v k)))
+
+(define (maybe-module-path? m)
+  (or (module-path? m) (not m)))
+
+(define (phase-level? pl)
+  (or (exact-integer? pl) (not pl)))
+
+(define (declaration-keyword? dk)
+  #t)
+
+(define (datum? d)
+  (not (syntax? d)))
+
+; Represents a variable expression.
+; One variable is bound to another if they point to the same location in memory
+(struct variable (name
+                  srcloc
+                  assigned
+                  referenced)
+  #:methods gen:custom-write
+  [(define (write-proc data port mode)
+     (fprintf port "#(variable: ~a)" (variable-name data)))]
+  #:methods gen:equal+hash
+  [(define (equal-proc a b t) ((current-variable-equal?) a b))
+   (define (hash-proc v t) (eq-hash-code v))
+   (define (hash2-proc v t) (eq-hash-code v))])
+(define (make-variable name
+                       #:source-location [srcloc #f]
+                       #:assigned? [assigned 'unknown]
+                       #:referenced? [ref 'unknown])
+  (variable name srcloc assigned ref))
+(define current-variable-equal? (make-parameter (lambda (a b) (eq? a b))))
