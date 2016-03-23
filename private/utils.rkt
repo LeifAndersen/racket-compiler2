@@ -8,7 +8,9 @@
          update-current-languages!
          start-current-language!
          current-source-top
-         current-target-top)
+         current-target-top
+         primitive-identifier?
+         primitive->symbol)
 
 (require (except-in nanopass/base
                     define-language
@@ -176,3 +178,20 @@
                                       (cons #`(define name** name*)
                                             (build-partial-compiler (cdr passes) (- pass-count 1))))
                                     (build-partial-compiler (cdr passes) (- pass-count 1))))))))]))
+
+; Pointer to a primitive module
+; For use in primitive-identifier? and primitive->symbol
+(define primitive-module
+  (car (identifier-binding #'+)))
+
+; Determines if an identifier is a primitive.
+; Identifier -> Boolean
+(define (primitive-identifier? identifier)
+  (define binding (identifier-binding identifier))
+  (and (list? binding) (eq? (car binding) primitive-module)))
+
+; Converts a primitive into one in Racket's primitive table
+; Identifier -> Symbol
+(define (primitive->symbol identifier)
+  (define binding (identifier-binding identifier))
+  (cadr binding))
