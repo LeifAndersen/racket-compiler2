@@ -34,7 +34,8 @@
                      racket/syntax
                      racket/stxparam
                      racket/stxparam-exptime)
-         "private/utils.rkt")
+         "private/utils.rkt"
+         "private/components.rkt")
 
 (module+ test
   (require rackunit
@@ -463,7 +464,8 @@
                                                    ,(parse-raw-module-path #'raw-module-path env))]
                               [(all-except raw-module-path ids:id ...)
                                `(all-except ,(parse-raw-module-path #'raw-module-path)
-                                            ,(map (curryr parse-expr env) (syntax->list #'(ids ...))) ...)]
+                                            ,(map (curryr parse-expr env)
+                                                  (syntax->list #'(ids ...))) ...)]
                               [(prefix-all-except id:id raw-module-path ids:id ...)
                                `(prefix-all-except
                                  ,(syntax-e #'id)
@@ -528,7 +530,8 @@
                                 `(rename* ,(parse-expr #'id1 env) ,(parse-expr #'id2 env))]
                                [(struct name:id (fields:id ...))
                                 `(struct ,(parse-expr #'name env)
-                                   (,(map (curryr parse-expr env) (syntax->list #'(fields ...))) ...))]
+                                   (,(map (curryr parse-expr env)
+                                          (syntax->list #'(fields ...))) ...))]
                                [(all-from raw-module-path)
                                 `(all-from-except ,(parse-raw-module-path #'raw-module-path env))]
                                [(all-from-except raw-module-path ids:id ...)
@@ -547,7 +550,8 @@
                                   ,(map (curryr parse-expr env) (syntax->list #'(ids ...))) ...)]
                                [(protect spec ...)
                                 `(protect*
-                                  ,(map (curryr parse-phaseless-prov-spec env) (syntax->list #'(spec ...))) ...)]))
+                                  ,(map (curryr parse-phaseless-prov-spec env)
+                                        (syntax->list #'(spec ...))) ...)]))
 
   (parse-top form initial-env))
 
@@ -1428,13 +1432,16 @@
              abody)
            (letrec-values ([(v ...) expr1] ...)
              abody)
-           (set! v expr))
+           (set! v expr)
+           (quote datum))
         (+ set-expr
            (undefined)
            (let ([v expr1] ...)
              set-abody)
            (letrec ([v lambda] ...)
              expr)))
+  (lambda (lambda)
+    (+ (quote datum)))
   (set-expr (set-expr)
             (+ (set!-values (v ...) expr)))
   (set-abody (set-abody)
@@ -1474,8 +1481,20 @@
 (module+ test
   (update-current-compile!))
 
-(define-pass inline-expressions : current-target (e) -> current-target ()
+;; ===================================================================================================
+
+(define-pass inline-expressions* : current-target (e context env) -> current-target ()
   (definitions
+    (struct app (operands
+                 context
+                 [inlined? #:auto])
+      #:mutable
+      #:auto-value #f)
+    (define empty-env (hash))
+    (define ((env-lookup env) x)
+      (dict-ref env x x))
+    (define (variable-referenced? . args)
+      (void)) ;; TODO
     (define (simple? e)
       (nanopass-case (current-target expr) e
                      [(quote ,datum) #t]
@@ -1483,6 +1502,9 @@
                      [,lambda #t]
                      [(primitive ,id) #t]
                      [else #f]))
+
+    ; Constructs begin expressions, flattening them if possible
+    ; (Listof Expr) Expr -> Expr
     (define (make-begin e1 e2)
       (define e1* (filter simple? e1))
       (cond [(null? e1*) e2]
@@ -1491,13 +1513,105 @@
                (nanopass-case (current-target expr) e2
                               [(begin ,expr3 ... ,expr4)
                                `(begin ,(append e1* expr3) ,expr4)]
-                              [else `(begin ,e1* ,e2)]))]))
+                              [else `(begin ,e1* ... ,e2)]))]))
+
+    ;; Returns the resulting expression of a sequence of operations.
+    ;;   (e.g. the last expression of a begin form)
+    ;; Expr -> Expr
     (define (result-exp e)
-      (void)) ;; TODO
-    (define (app? context)
-      (void)) ;; TODO
+      (nanopass-case (current-target expr) e
+                     [(begin ,expr* ... ,expr) expr]
+                     [else e]))
+
+    ;; Contextually aware equality checks for expressions.
+    ;;    (For example, all datusm are equal in an effect context)
+    ;; Expr Expr Context -> Boolean
+    (define (contextual-equal? e1 e2 ctx)
+      (nanopass-case (current-target expr) e1
+                     [(quote ,datum1)
+                      (nanopass-case (current-target expr) e2
+                                     [(quote ,datum2)
+                                      [match context
+                                        ['effect #t]
+                                        ['test (if datum1 datum2 (not datum2))]
+                                        [else (eq? datum1 datum2)]]]
+                                     [else #f])]
+                     [else #f]))
+   
     (define (inline-ref id context env)
-      (void))) ;; TODO
+      (void)) ;; TODO
+    (define (inline-call e operands context env)
+      (define context* (app operand context))
+      (define e* (inline-expressions e context* env))
+      (if (app-inlined? context)
+          (residualize-operands operands e)
+          (with-output-language (current-target expr)
+            `(#%plain-app ,e ,(map value-visit-operand! operands) ...))))
+    (define (value-visit-operand! opnd)
+      (or (operand-value opnd)
+          (let ([e (inline-expressions (operand-exp opnd)
+                                       'value
+                                       (operand-env opnd))])
+            (set-operand-value! opnd e)
+            e)))
+
+    ; Inlines a call, keeping around operands only when needed
+    ;   for effect
+    ; (Listof Operands) Expr -> Expr
+    (define (residualize-operands operands e)
+      (define operands* (filter operand-residualized-for-effect? operands))
+      (cond [(null? operands*) e]
+            [else
+             (define operands** (for/list ([o (in-list operands*)])
+                                  (or (operand-value o)
+                                      (inline-expressions (operand-exp o)
+                                                          'effect
+                                                          (operand-env o)))))
+             (make-begin operands** e)]))
+
+    (define (inline . args)
+      (void)) ;; TODO
+
+    ; Does constant fold on primitives (if possible)
+    ; Primitive-Expr Context -> Expr
+    (define (fold-prim prim context)
+      (define prim* (nanopass-case (current-target expr) prim
+                                   [(primitive ,id) id]))
+      (define operands (app-operands context))
+      (with-output-language (current-target expr)
+        (define result
+          (or (and (effect-free? prim*)
+                   (match (app-context context)
+                     ['effect `(primitive void)]
+                     ['test (and (not (equal? prim `(quote #f))) `(quote #t))]
+                     [else #f]))
+              (and (foldable? prim*)
+                   (let ([vals (map value-visit-operand! operands)])
+                     (define-values (consts? operands*)
+                       (for/fold ([const-vals #t])
+                                 ([v (in-list vals)])
+                         (values
+                          (and const-vals
+                               (nanopass-case (current-target expr) v
+                                              [(quote ,datum) #t]
+                                              [else #f]))
+                          (cons
+                           (nanopass-case (current-target expr) v
+                                          [(quote ,datum) datum]
+                                          [else #f])
+                           prim*))))
+                     (define operands** (reverse operands*))
+                     (and consts?
+                          (with-handlers ([exn? (lambda (x) #f)])
+                            `(quote ,(parameterize ([current-namespace (make-base-namespace)])
+                                       (eval (cons prim* operands**))))))))))
+        (if result
+            (begin
+              (for-each (curryr set-operand-residualized-for-effect?! #t) operands)
+              (set-app-inlined?! context #t)
+              result)
+            prim))))
+  
   (Expr : expr (e context env) -> expr ()
         [(quote ,datum) `(quote ,datum)]
         [,v (inline-ref v context env)]
@@ -1507,17 +1621,58 @@
          (nanopass-case (current-target expr) (result-exp expr1)
                         [(quote ,datum)
                          (make-begin expr1
-                                     (inline-expressions `(if ,datum ,expr2 ,expr3)
+                                     (inline-expressions `(if ',datum ,expr2 ,expr3)
                                                          context
                                                          env))]
                         [else
                          (define context* (if (app? context) 'value context))
                          (define expr2* (inline-expressions expr2 context* env))
                          (define expr3* (inline-expressions expr3 context* env))
-                         (if (equal? expr2* expr3*)
+                         (if (contextual-equal? expr2* expr3* context*)
                              (make-begin expr1 expr2*)
-                             `(if ,expr1 ,expr2* ,expr3*))])])
-  (Expr e null null))
+                             `(if ,expr1 ,expr2* ,expr3*))])]
+        [(set!-values (,v ...) ,expr)
+         (define v* (map (env-lookup env) v))
+         (make-begin
+          (cond
+            [(andmap variable-referenced? v*)
+             (define expr* (inline-expressions* expr 'value env))
+             (map (curryr set-variable-assigned! #t) v*)
+             `(set!-values (,v* ...) ,expr*)]
+            [else
+             (inline-expressions expr 'effect env)])
+          `(#%plain-app (primitive void)))]
+        [(#%plain-app ,expr ,expr* ...)
+         (inline-call expr (map (curryr make-operand env) expr*) context env)]
+        [(primitive ,id)
+         (match context
+           ['effect `'#t]
+           ['test `'#t]
+           ['value e]
+           [else (fold-prim id context)])]
+        ; TODO
+        #;[(letrec ([,v ,lambda] ...)
+           ,expr)
+         (with-extended-env* ([env v] [env v (make-list (length id) #f)])
+           ....)])
+  (Lambda : lambda (e context env) -> lambda ()
+          [(#%plain-lambda ,formals ,abody)
+           (match context
+             ['effect `'#t]
+             ['test `'#t]
+             ; TODO
+             #;['value (with-extended-env* ([env id] [env id (make-list (length id) #f)])
+                       `(lambda ,formals ,(inline-expressions 'value env)))]
+             [else (inline e context env)])])
+  (Expr e 'value empty-env))
+
+(define (inline-expressions e [context 'value] [env (hash)])
+  (inline-expressions* e context env))
+
+(module+ test
+  (update-current-compile!))
+
+;; ===================================================================================================
 
 (define-pass optimize-direct-call : current-target (e) -> current-target ()
   (Expr : expr (e) -> expr ()
@@ -1607,14 +1762,16 @@
         (- set-expr
            (let ([v expr1] ...)
              set-abody))
-        (+ (let ([v expr1] ...)
+        (+ (quote datum)
+           (let ([v expr1] ...)
              expr)
            (#%unbox v)
            (#%box v)
            (set!-values (v ...) expr)
            (set!-boxes (v ...) expr)))
   (lambda (lambda)
-    (- (#%plain-lambda formals abody))
+    (- (#%plain-lambda formals abody)
+       (quote datum))
     (+ (#%plain-lambda formals expr)))
   (set-abody (set-abody)
              (- (begin-set! set-expr ... abody)))
@@ -2589,7 +2746,11 @@
                   [(program ,eni (,binding ...) ,top-level-form)
                    (zo:compilation-top eni
                                        (hash)
-                                       (zo:prefix 0 (map (lambda (x) (and x (variable-name x))) binding) '() 'missing)
+                                       (zo:prefix
+                                        0
+                                        (map (lambda (x) (and x (variable-name x))) binding)
+                                        '()
+                                        'missing)
                                        (TopLevelForm top-level-form))])
   (TopLevelForm : top-level-form (e) -> * ()
                 [(#%expression ,expr)
@@ -2862,6 +3023,7 @@
   (make-begin-explicit parse)
   (identify-assigned-variables mutable-variable-elimination)
   purify-letrec
+  inline-expressions
   optimize-direct-call
   (convert-assignments mutable-variable-elimination)
   (uncover-free closure-conversion)
