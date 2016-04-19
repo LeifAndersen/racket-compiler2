@@ -166,7 +166,7 @@
         (case-lambda (formals expr* ... expr) ...)
         (if expr1 expr2 expr3)
         (begin expr* ... expr)
-        (begin0 expr* ... expr)
+        (begin0 expr expr* ...)
         (let-values ([(v ...) expr1] ...)
           expr* ... expr)
         (letrec-values ([(v ...) expr1] ...)
@@ -349,10 +349,10 @@
                  `(begin ,(for/list ([b (in-list (syntax->list #'(body* ...)))])
                             (parse-expr b env)) ...
                          ,(parse-expr #'body env))]
-                [(begin0 body* ... body)
-                 `(begin0 ,(for/list ([b (in-list (syntax->list #'(body* ...)))])
-                             (parse-expr b env)) ...
-                          ,(parse-expr #'body env))]
+                [(begin0 body body* ...)
+                 `(begin0 ,(parse-expr #'body env)
+                          ,(for/list ([b (in-list (syntax->list #'(body* ...)))])
+                             (parse-expr b env)) ...)]
                 [(let-values ([(ids:id ...) val] ...)
                    body* ... body)
                  (define env* (extend-env env
@@ -1282,7 +1282,7 @@
        `(#%plain-lambda (,x)
                         (begin (#%plain-app (primitive +) ,x'1)
                                (begin0 ,x
-                                 (set! ,x '42)))))
+                                       (set! ,x '42)))))
       (check-equal?
        (current-compile #'(case-lambda [(x) (+ x 1)]
                                        [(x y) x (+ x y)]))
@@ -1349,8 +1349,8 @@
         [(begin ,[expr* assigned*] ... ,[expr assigned])
          (values `(begin ,expr* ... ,expr)
                  (apply set-union assigned assigned*))]
-        [(begin0 ,[expr* assigned*] ... ,[expr assigned])
-         (values `(begin0 ,expr* ... ,expr)
+        [(begin0 ,[expr assigned] ,[expr* assigned*] ...)
+         (values `(begin0 ,expr ,expr* ...)
                  (apply set-union assigned assigned*))]
         [(#%plain-app ,[expr assigned] ,[expr* assigned*] ...)
          (values `(#%plain-app ,expr ,expr* ...)
@@ -1518,9 +1518,10 @@
     ;; Returns the resulting expression of a sequence of operations.
     ;;   (e.g. the last expression of a begin form)
     ;; Expr -> Expr
-    (define (result-exp e)
+    (define (result-expr e)
       (nanopass-case (current-target expr) e
                      [(begin ,expr* ... ,expr) expr]
+                     [(begin0 ,expr ,expr* ...) expr]
                      [else e]))
 
     ;; Contextually aware equality checks for expressions.
@@ -1618,7 +1619,7 @@
         [(begin ,[expr1 'effect env -> expr1] ... ,[expr2 context env -> expr2])
          (make-begin expr1 expr2)]
         [(if ,[expr1 'test env -> expr1] ,expr2 ,expr3)
-         (nanopass-case (current-target expr) (result-exp expr1)
+         (nanopass-case (current-target expr) (result-expr expr1)
                         [(quote ,datum)
                          (make-begin expr1
                                      (inline-expressions `(if ',datum ,expr2 ,expr3)
@@ -1998,9 +1999,9 @@
          (values `(begin ,expr* ... ,expr)
                  (apply set-union free-local free-local*)
                  (apply set-union free-global free-global*))]
-        [(begin0 ,[expr* free-local* free-global*] ...
-                 ,[expr free-local free-global])
-         (values `(begin0 ,expr* ... ,expr)
+        [(begin0 ,[expr free-local free-global]
+                 ,[expr* free-local* free-global*] ...)
+         (values `(begin0 ,expr ,expr* ...)
                  (apply set-union free-local free-local*)
                  (apply set-union free-global free-global*))]
         [(with-continuation-mark ,[expr1 free-local1 free-global1]
@@ -2662,8 +2663,8 @@
         [(begin ,[expr* depth*] ... ,[expr depth])
          (values `(begin ,expr* ... ,expr)
                  (apply max depth depth*))]
-        [(begin0 ,[expr* depth*] ... ,[expr depth])
-         (values `(begin0 ,expr* ... ,expr)
+        [(begin0 ,[expr depth] ,[expr* depth*] ...)
+         (values `(begin0 ,expr ,expr* ...)
                  (apply max depth depth*))]
         [(with-continuation-mark ,[expr1 depth1] ,[expr2 depth2] ,[expr3 depth3])
          (values `(with-continuation-mark ,expr1 ,expr2 ,expr3)
@@ -2840,9 +2841,8 @@
         [(begin ,expr* ... ,expr)
          (zo:seq (append (map Expr expr*)
                          (list (Expr expr))))]
-        [(begin0 ,expr* ... ,expr)
-         (zo:beg0 (append (map Expr expr*)
-                          (list (Expr expr))))]
+        [(begin0 ,expr ,expr* ...)
+         (zo:beg0 (cons (Expr expr) (map Expr expr*)))]
         [(quote ,datum) datum]
         [(quote-syntax ,datum)
          (void)]
