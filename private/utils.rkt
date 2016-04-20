@@ -15,20 +15,10 @@
          foldable?
          effect-free?)
 
-(require (except-in nanopass/base
-                    define-language
-                    define-pass)
-         (rename-in nanopass/base
-                    [define-language nanopass:define-language]
-                    [define-pass nanopass:define-pass])
-         racket/splicing
-         rackunit
+(require rackunit
          (rename-in racket/base
                     [compile base:compile]
-                    [current-compile base:current-compile])
-         (for-syntax racket/base
-                     syntax/parse
-                     racket/syntax))
+                    [current-compile base:current-compile]))
 
 (require/expose compiler/decompile (primitive-table))
 
@@ -71,8 +61,8 @@
 (struct variable (name
                   operand
                   srcloc
-                  assigned
-                  referenced)
+                  assigned?
+                  referenced?)
   #:mutable
   #:methods gen:custom-write
   [(define (write-proc data port mode)

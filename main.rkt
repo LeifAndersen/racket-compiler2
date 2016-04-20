@@ -1485,16 +1485,48 @@
 
 (define-pass inline-expressions* : current-target (e context env) -> current-target ()
   (definitions
+
+    ;; App conetxt, for storing valid functions
+    ;; Valid contexts are 'test 'value 'effect, and other
+    ;;   app contexts
     (struct app (operands
                  context
                  [inlined? #:auto])
       #:mutable
       #:auto-value #f)
+
+    ;; Environments map source program variables to residual program
+    ;;   variables. Bindings not in the environment map directly
+    ;;   to themselves
     (define empty-env (hash))
     (define ((env-lookup env) x)
       (dict-ref env x x))
-    (define (variable-referenced? . args)
-      (void)) ;; TODO
+    (define (extend-env env x opnd)
+      (define x*
+        (make-variable (variable-name x)
+                       #:operand opnd
+                       #:assigned? #t
+                       #:referenced? #t))
+      (dict-set env x x*))
+    (define (extend-env* env x* opnd*)
+      (for/fold ([env env])
+                ([x (in-list x*)]
+                 [opnd (in-list opnd*)])
+        (extend-env env x opnd)))
+
+    ;; Determins if the amount of operands passed into a function
+    ;;    matches the amount accepted by the formals
+    ;; Formals Opearnds -> Boolean
+    (define (operands-match? formals operands)
+      (define formals* (formals->identifiers current-target formals))
+      (define rest? (formals-rest? current-target formals))
+      (if rest?
+          ((length formals) . <= . (length operands))
+          (= (length formals) (length operands))))
+
+    ;; Determins if a syntactic form is simple and can thus be
+    ;;    ignored in a begin statement
+    ;; Expr -> Boolean
     (define (simple? e)
       (nanopass-case (current-target expr) e
                      [(quote ,datum) #t]
@@ -1515,6 +1547,44 @@
                                `(begin ,(append e1* expr3) ,expr4)]
                               [else `(begin ,e1* ... ,e2)]))]))
 
+    ;; Constructs a let binding (to be used by inline)
+    ;;   Empty lets are removed, assigned but not referenced
+    ;;   variables are kept only for effect.
+    ;; (Listof Var-Exprs) (Listof Operands) Expr -> Expr
+    (define (make-let vars operands body)
+      (define (set-effect! result)
+        (for-each (curryr set-operand-residualized-for-effect?! #t) operands)
+        result)
+      (define var-map (map cons vars operands))
+      (with-output-language (current-target expr)
+        (nanopass-case (current-target expr) body
+                       [(quote ,datum) (set-effect! body)]
+                       [(primitive ,id) (set-effect! body)]
+                       [,v
+                        (for ([(key val) (in-dict var-map)])
+                          (unless (eq? val v)
+                            (set-operand-residualized-for-effect?! val #t)))
+                        (cond
+                          [(set-member? vars v)
+                           (value-visit-operand! (dict-ref var-map v))]
+                          [else body])]
+                       [else
+                        (for ([var (in-list vars)])
+                          (when (and (variable-assigned? var)
+                                     (not (variable-referenced? var)))
+                            (set-operand-residualized-for-effect?! var #t)))
+                        (define visited-vars
+                          (for/list ([(i j) (in-dict var-map)]
+                                     #:when (and (variable-referenced? i)
+                                                 (variable-assigned? i)))
+                            (if (variable-referenced? i)
+                                (cons i (value-visit-operand! j))
+                                (cons i `(primitive void)))))
+                        (if (dict-empty? visited-vars)
+                            body
+                            `(let ([,(dict-keys visited-vars) ,(dict-values visited-vars)] ...)
+                               ,body))])))
+ 
     ;; Returns the resulting expression of a sequence of operations.
     ;;   (e.g. the last expression of a begin form)
     ;; Expr -> Expr
@@ -1538,9 +1608,58 @@
                                         [else (eq? datum1 datum2)]]]
                                      [else #f])]
                      [else #f]))
-   
-    (define (inline-ref id context env)
-      (void)) ;; TODO
+
+    ;; Performs variable inlining
+    ;; Variable Context Env -> Expr
+    (define (inline-ref v context env)
+      (match context
+        ['effect `(primitive void)]
+        [_
+         (define v* ((env-lookup env) v))
+         (define opnd (variable-operand v*))
+         (cond
+           [opnd
+            (value-visit-operand! opnd)
+            (cond
+              [(variable-assigned? v*) (residualize-ref v*)]
+              [else
+               (define rhs (result-expr (operand-value opnd)))
+               (nanopass-case (current-target expr) rhs
+                              [(quote ,datum) rhs]
+                              [,v**
+                               (cond
+                                 [(variable-assigned? v**) (residualize-ref)]
+                                 [else
+                                  (define v-opnd (variable-operand v))
+                                  (if (and v-opnd (operand-value v-opnd))
+                                      (copy v** v-opnd context)
+                                      (residualize-ref v**))])]
+                              [else (copy v opnd env)])])]
+           [else (residualize-ref v*)])]))
+
+
+    ;; Helper for inline-ref, tries to inline references to variables
+    ;; Variable Operand Context -> Variable
+    (define (copy v opnd context)
+      (with-output-language (Lsrc expr)
+        (define rhs (result-expr (operand-value opnd)))
+        (nanopass-case (current-target expr) rhs
+                       [(#%plain-lambda ,formals ,abody)
+                        (match context
+                          ['value (residualize-ref v)]
+                          ['test `'#t]
+                          [(struct* app ()) (inline rhs context empty-env)])]
+                       [(primitive ,id)
+                        (match context
+                          ['value rhs]
+                          ['test `'#t]
+                          [(struct* app ()) (fold-prim id context)])]
+                       [else (residualize-ref v)])))
+ 
+    ;; If an application has been inlined, keep around
+    ;;   the expresssions for side effects (in a begin form)
+    ;;   otherwise just return the call
+    ;; Expr (Listof Operands) Context Env -> Expr
     (define (inline-call e operands context env)
       (define context* (app operand context))
       (define e* (inline-expressions e context* env))
@@ -1548,6 +1667,10 @@
           (residualize-operands operands e)
           (with-output-language (current-target expr)
             `(#%plain-app ,e ,(map value-visit-operand! operands) ...))))
+
+    ;; Try to inline an expression to a value. Memoizes the result,
+    ;;    returns the resulting expression.
+    ;; Operand -> Expr
     (define (value-visit-operand! opnd)
       (or (operand-value opnd)
           (let ([e (inline-expressions (operand-exp opnd)
@@ -1556,9 +1679,15 @@
             (set-operand-value! opnd e)
             e)))
 
-    ; Inlines a call, keeping around operands only when needed
-    ;   for effect
-    ; (Listof Operands) Expr -> Expr
+    ;; Sets a variable as being referenced
+    ;; Ref -> Ref
+    (define (residualize-ref v)
+      (set-variable-referenced?! #t)
+       v)
+
+    ;; Inlines a call, keeping around operands only when needed
+    ;;   for effect
+    ;; (Listof Operands) Expr -> Expr
     (define (residualize-operands operands e)
       (define operands* (filter operand-residualized-for-effect? operands))
       (cond [(null? operands*) e]
@@ -1570,23 +1699,48 @@
                                                           (operand-env o)))))
              (make-begin operands** e)]))
 
-    (define (inline . args)
-      (void)) ;; TODO
+    ;; Performs the actual inlining
+    ;; Lambda-Expr App-Context Env -> Exp
+    (define (inline proc context env)
+      (nanopass-case (current-target lambda) proc
+                     [(#%plain-lambda ,formals
+                                      (assigned (,v ...) ,expr))
+                      (define formals* (formals->identifiers current-target formals))
+                      (define rest? (formals-rest? current-target formals))
+                      (define opnds (app-operands context))
+                      (define opnds*
+                        (cond
+                          [rest?
+                           (define-values (single-opnds rest-opnds)
+                             (split-at opnds (- (length formals*) 1)))
+                           (append single-opnds
+                                   ;; TODO, does this operand need to be
+                                   ;;   residulized for effect?
+                                   (list
+                                    (make-operand
+                                     (with-output-language (current-target expr)
+                                       `(#%plain-app (primitive list) ,rest-opnds ...))
+                                     (apply hash-union (hash)
+                                            (map operand-env rest opnds)))))]
+                          [else opnds]))
+                      (define env* (extend-env* env formals* opnds*))
+                      (define body (inline-expressions expr (app-context context) env*))
+                      (define result (make-let formals* opnds* body))
+                      (set-app-inlined?! context #t)
+                      result]))
 
-    ; Does constant fold on primitives (if possible)
-    ; Primitive-Expr Context -> Expr
+    ;; Does constant fold on primitives (if possible)
+    ;; ID Context -> Expr
     (define (fold-prim prim context)
-      (define prim* (nanopass-case (current-target expr) prim
-                                   [(primitive ,id) id]))
       (define operands (app-operands context))
       (with-output-language (current-target expr)
         (define result
-          (or (and (effect-free? prim*)
+          (or (and (effect-free? prim)
                    (match (app-context context)
                      ['effect `(primitive void)]
                      ['test (and (not (equal? prim `(quote #f))) `(quote #t))]
                      [else #f]))
-              (and (foldable? prim*)
+              (and (foldable? prim)
                    (let ([vals (map value-visit-operand! operands)])
                      (define-values (consts? operands*)
                        (for/fold ([const-vals #t])
@@ -1600,19 +1754,19 @@
                            (nanopass-case (current-target expr) v
                                           [(quote ,datum) datum]
                                           [else #f])
-                           prim*))))
+                           prim))))
                      (define operands** (reverse operands*))
                      (and consts?
                           (with-handlers ([exn? (lambda (x) #f)])
                             `(quote ,(parameterize ([current-namespace (make-base-namespace)])
-                                       (eval (cons prim* operands**))))))))))
+                                       (eval (cons prim operands**))))))))))
         (if result
             (begin
               (for-each (curryr set-operand-residualized-for-effect?! #t) operands)
               (set-app-inlined?! context #t)
               result)
             prim))))
-  
+
   (Expr : expr (e context env) -> expr ()
         [(quote ,datum) `(quote ,datum)]
         [,v (inline-ref v context env)]
@@ -1638,7 +1792,7 @@
           (cond
             [(andmap variable-referenced? v*)
              (define expr* (inline-expressions* expr 'value env))
-             (map (curryr set-variable-assigned! #t) v*)
+             (map (curryr set-variable-assigned?! #t) v*)
              `(set!-values (,v* ...) ,expr*)]
             [else
              (inline-expressions expr 'effect env)])
@@ -1650,21 +1804,40 @@
            ['effect `'#t]
            ['test `'#t]
            ['value e]
-           [else (fold-prim id context)])]
-        ; TODO
-        #;[(letrec ([,v ,lambda] ...)
+           [(struct* app ()) (fold-prim id context)])]
+        [(letrec ([,v ,lambda] ...)
            ,expr)
-         (with-extended-env* ([env v] [env v (make-list (length id) #f)])
-           ....)])
+         (define operands (map (curryr make-operand env) lambda))
+         (for ([i (in-list v)]
+               [j (in-list operand)])
+           (set-variable-operand! i j))
+         (define expr* (inline-expressions expr context env))
+         (define filtered-vars
+           (for/list ([i (in-list v)]
+                      [j (in-list operands)]
+                      #:when (variable-referenced? i))
+             (cons i j)))
+         (if (or (null? filtered-vars)
+                 (nanopass-case (current-target expr) expr
+                                [(quote ,datum) #t]
+                                [(primitive ,id) #t]
+                                [else #f]))
+             expr
+             `(letrec ([,(dict-keys filtered-vars)
+                        ,(dict-values filtered-vars)] ...)
+                ,expr))])
+
   (Lambda : lambda (e context env) -> lambda ()
-          [(#%plain-lambda ,formals ,abody)
+          [(#%plain-lambda ,formals (assigned (,v ...) ,expr))
            (match context
              ['effect `'#t]
              ['test `'#t]
-             ; TODO
-             #;['value (with-extended-env* ([env id] [env id (make-list (length id) #f)])
-                       `(lambda ,formals ,(inline-expressions 'value env)))]
-             [else (inline e context env)])])
+             ['value
+              (define formals* (formals->identifiers current-target formals))
+              (define env* (extend-env* env formals* (make-list (length formals) #f)))
+              `(#%plain-lambda ,formals (assigned (,v ...) ,(inline-expressions 'value env)))]
+             [(struct* app ()) (inline e context env)])])
+  
   (Expr e 'value empty-env))
 
 (define (inline-expressions e [context 'value] [env (hash)])
