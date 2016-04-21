@@ -1188,10 +1188,11 @@
                        (for/list ([pps (in-list phaseless-prov-spec)])
                          (PhaselessProvSpec pps #t)))]))
 
+;; TODO, these tests
 (splicing-let-syntax ([current-target (syntax-local-value #'current-target-top)])
   (module+ test
     (update-current-compile!)
-    (block
+    #;(block
     (define x (make-variable 'x))
     (define-compiler-test current-target top-level-form
       (check-equal?
@@ -1235,8 +1236,12 @@
            (letrec-values ([(v ...) expr1] ...)
              expr))))
 
+;; Makes explicit begins so that only they need to deal with expression blocks.
+;; Could probably be dealt with in parse-and-rename
+;; Also marks variables as being referenced.
 (define-pass make-begin-explicit : current-source (e) -> current-target ()
   (Expr : expr (e) -> expr ()
+        [,v (set-variable-referenced?! v #t) v]
         [(#%plain-lambda ,[formals] ,[expr*] ... ,[expr])
          (if (= (length expr*) 0)
              `(#%plain-lambda ,formals ,expr)
@@ -1332,6 +1337,7 @@
                    (set-remove assigned* (formals->identifiers* formals)))])
   (Expr : expr (e) -> expr ('())
         [(set! ,v ,[expr assigned*])
+         (set-variable-assigned?! v #t)
          (values `(set! ,v ,expr)
                  (set-add assigned* v))]
         [(let-values ([(,v ...) ,[expr assigned]] ...) ,[expr* assigned*])
@@ -1478,22 +1484,24 @@
               (assigned (,v* ...)
                         ,expr*)))]))
 
+;; TODO: need tests here
+;; (Use tests from cp0 pass)
 (module+ test
   (update-current-compile!))
 
 ;; ===================================================================================================
 
+;; App conetxt, for storing valid functions
+;; Valid contexts are 'test 'value 'effect, and other
+;;   app contexts
+(struct app (operands
+             context
+             [inlined? #:auto])
+  #:mutable
+  #:auto-value #f)
+
 (define-pass inline-expressions* : current-target (e context env) -> current-target ()
   (definitions
-
-    ;; App conetxt, for storing valid functions
-    ;; Valid contexts are 'test 'value 'effect, and other
-    ;;   app contexts
-    (struct app (operands
-                 context
-                 [inlined? #:auto])
-      #:mutable
-      #:auto-value #f)
 
     ;; Environments map source program variables to residual program
     ;;   variables. Bindings not in the environment map directly
@@ -1538,7 +1546,7 @@
     ; Constructs begin expressions, flattening them if possible
     ; (Listof Expr) Expr -> Expr
     (define (make-begin e1 e2)
-      (define e1* (filter simple? e1))
+      (define e1* (filter (negate simple?) e1))
       (cond [(null? e1*) e2]
             [else
              (with-output-language (current-target expr)
@@ -1621,7 +1629,7 @@
            [opnd
             (value-visit-operand! opnd)
             (cond
-              [(variable-assigned? v*) (residualize-ref v*)]
+              [(variable-assigned? v) (residualize-ref v*)]
               [else
                (define rhs (result-expr (operand-value opnd)))
                (nanopass-case (current-target expr) rhs
@@ -1634,7 +1642,7 @@
                                   (if (and v-opnd (operand-value v-opnd))
                                       (copy v** v-opnd context)
                                       (residualize-ref v**))])]
-                              [else (copy v opnd env)])])]
+                              [else (copy v opnd context)])])]
            [else (residualize-ref v*)])]))
 
 
@@ -1661,12 +1669,12 @@
     ;;   otherwise just return the call
     ;; Expr (Listof Operands) Context Env -> Expr
     (define (inline-call e operands context env)
-      (define context* (app operand context))
+      (define context* (app operands context))
       (define e* (inline-expressions e context* env))
-      (if (app-inlined? context)
-          (residualize-operands operands e)
+      (if (app-inlined? context*)
+          (residualize-operands operands e*)
           (with-output-language (current-target expr)
-            `(#%plain-app ,e ,(map value-visit-operand! operands) ...))))
+            `(#%plain-app ,e* ,(map value-visit-operand! operands) ...))))
 
     ;; Try to inline an expression to a value. Memoizes the result,
     ;;    returns the resulting expression.
@@ -1682,8 +1690,8 @@
     ;; Sets a variable as being referenced
     ;; Ref -> Ref
     (define (residualize-ref v)
-      (set-variable-referenced?! #t)
-       v)
+      (set-variable-referenced?! v #t)
+      v)
 
     ;; Inlines a call, keeping around operands only when needed
     ;;   for effect
@@ -1791,7 +1799,7 @@
          (make-begin
           (cond
             [(andmap variable-referenced? v*)
-             (define expr* (inline-expressions* expr 'value env))
+             (define expr* (inline-expressions expr 'value env))
              (map (curryr set-variable-assigned?! #t) v*)
              `(set!-values (,v* ...) ,expr*)]
             [else
@@ -1809,9 +1817,10 @@
            ,expr)
          (define operands (map (curryr make-operand env) lambda))
          (for ([i (in-list v)]
-               [j (in-list operand)])
+               [j (in-list operands)])
            (set-variable-operand! i j))
          (define expr* (inline-expressions expr context env))
+         (displayln "got here")
          (define filtered-vars
            (for/list ([i (in-list v)]
                       [j (in-list operands)]
@@ -1834,100 +1843,96 @@
              ['test `'#t]
              ['value
               (define formals* (formals->identifiers current-target formals))
-              (define env* (extend-env* env formals* (make-list (length formals) #f)))
-              `(#%plain-lambda ,formals (assigned (,v ...) ,(inline-expressions 'value env)))]
+              (define env* (extend-env* env formals* (make-list (length formals*) #f)))
+              `(#%plain-lambda ,formals (assigned (,v ...) ,(inline-expressions expr 'value env)))]
              [(struct* app ()) (inline e context env)])])
-  
-  (Expr e 'value empty-env))
+
+  (begin
+    (printf "~nInlining: e: ~a ctx: ~a env: ~a~n" e context env)
+    (sleep 1)
+    (Expr e context env)))
 
 (define (inline-expressions e [context 'value] [env (hash)])
   (inline-expressions* e context env))
-
-(module+ test
-  (update-current-compile!))
-
-;; ===================================================================================================
-
-(define-pass optimize-direct-call : current-target (e) -> current-target ()
-  (Expr : expr (e) -> expr ()
-        [(#%plain-app (#%plain-lambda (,v ...) ,[abody])
-                      ,[expr* -> expr*] ...)
-         (guard (= (length v) (length expr*)))
-         `(let ([,v ,expr*] ...)
-            (begin-set!
-              ,abody))]))
 
 (splicing-let-syntax ([current-target (syntax-local-value #'current-target-top)])
   (module+ test
     (update-current-compile!)
     (block
-    (define a (make-variable 'a))
-    (define b (make-variable 'b))
-    (define c (make-variable 'c))
-    (define x (make-variable 'x))
-    (define y (make-variable 'y))
-    (define z (make-variable 'z))
-    (define-compiler-test current-target top-level-form
-      (check-equal?
-       (current-compile #'((lambda (x) x) (lambda (y) y)))
-       `(let ([,x (#%plain-lambda (,y) (assigned () ,y))])
-          (begin-set!
-            (assigned () ,x))))
-      (check-equal?
-       (current-compile #'(letrec-values ([(a) (lambda (x) b)]
-                                          [(b) (lambda (y) a)])
-                            (a b)))
-       `(letrec ([,a (#%plain-lambda (,x) (assigned () ,b))]
-                 [,b (#%plain-lambda (,y) (assigned () ,a))])
-          (#%plain-app ,a ,b)))
-      (check-equal?
-       (current-compile #'(letrec-values ([(a) 5]
-                                          [(b c) (values 6 7)])
-                            (+ a b c)))
-       `(let ([,a (undefined)]
-              [,b (undefined)]
-              [,c (undefined)])
-          (begin-set!
-            (set!-values (,a) '5)
-            (set!-values (,b ,c) (#%plain-app (primitive values) '6 '7))
-            (assigned (,c ,b ,a)
-                      (#%plain-app (primitive +) ,a ,b ,c)))))
-      (check-equal?
-       (current-compile #'(let ([x (if #t 5 6)])
-                            (set! x (+ x 1))))
-       `(let ([,x (if '#t '5 '6)])
-          (begin-set!
-            (assigned (,x) (set!-values (,x) (#%plain-app (primitive +) ,x '1))))))
-      (check-equal?
-       (current-compile #'(let-values ([(x y) (values 1 2)]
-                                       [(z) 3])
-                            (set! x 5)
-                            (+ y z)))
-       `(let ([,x (undefined)]
-              [,y (undefined)]
-              [,z (undefined)])
-          (begin-set!
-            (set!-values (,x ,y) (#%plain-app (primitive values) '1 '2))
-            (set!-values (,z) '3)
-            (assigned (,x)
-                      (begin
-                        (set!-values (,x) '5)
-                        (#%plain-app (primitive +) ,y ,z))))))
-      (check-equal?
-       (current-compile #'(let-values ([(x y) (values 1 2)])
-                            (set! x y)
-                            y))
-       `(let ([,x (undefined)]
-              [,y (undefined)])
-          (begin-set!
-            (set!-values (,x ,y) (#%plain-app (primitive values) '1 '2))
-            (assigned (,x)
-                      (begin
-                        (set!-values (,x) ,y)
-                        ,y)))))))))
+     (define a (make-variable 'a))
+     (define b (make-variable 'b))
+     (define c (make-variable 'c))
+     (define x (make-variable 'x))
+     (define y (make-variable 'y))
+     (define z (make-variable 'z))
+     (define-compiler-test current-target top-level-form
+       (check-equal?
+        (current-compile #'((lambda (x) 42) 54))
+        `'42)
+       (check-equal?
+        (current-compile #'((lambda (x) x) (lambda (y) y)))
+        `(#%plain-lambda (,y) (assigned () ,y)))
+       (check-equal?
+        (current-compile #'(letrec-values ([(a) (lambda (x) a)])
+                             a))
+        `(letrec ([,a (#%plain-lambda (,x) (assigned () ,a))])
+           ,a))
+       #;(check-equal?
+        (current-compile #'(letrec-values ([(a) (lambda (x) b)]
+                                           [(b) (lambda (y) a)])
+                             (a b)))
+        `(letrec ([,a (#%plain-lambda (,x) (assigned () ,b))]
+                  [,b (#%plain-lambda (,y) (assigned () ,a))])
+           (#%plain-app ,a ,b)))
+       #;(check-equal?
+        (current-compile #'(letrec-values ([(a) 5]
+                                           [(b c) (values 6 7)])
+                             (+ a b c)))
+        `(let ([,a (undefined)]
+               [,b (undefined)]
+               [,c (undefined)])
+           (begin-set!
+             (set!-values (,a) '5)
+             (set!-values (,b ,c) (#%plain-app (primitive values) '6 '7))
+             (assigned (,c ,b ,a)
+                       (#%plain-app (primitive +) ,a ,b ,c)))))
+       #;(check-equal?
+        (current-compile #'(let ([x (if #t 5 6)])
+                             (set! x (+ x 1))))
+        `(let ([,x (if '#t '5 '6)])
+           (begin-set!
+             (assigned (,x) (set!-values (,x) (#%plain-app (primitive +) ,x '1))))))
+       #;(check-equal?
+        (current-compile #'(let-values ([(x y) (values 1 2)]
+                                        [(z) 3])
+                             (set! x 5)
+                             (+ y z)))
+        `(let ([,x (undefined)]
+               [,y (undefined)]
+               [,z (undefined)])
+           (begin-set!
+             (set!-values (,x ,y) (#%plain-app (primitive values) '1 '2))
+             (set!-values (,z) '3)
+             (assigned (,x)
+                       (begin
+                         (set!-values (,x) '5)
+                         (#%plain-app (primitive +) ,y ,z))))))
+       #;(check-equal?
+        (current-compile #'(let-values ([(x y) (values 1 2)])
+                             (set! x y)
+                             y))
+        `(let ([,x (undefined)]
+               [,y (undefined)])
+           (begin-set!
+             (set!-values (,x ,y) (#%plain-app (primitive values) '1 '2))
+             (assigned (,x)
+                       (begin
+                         (set!-values (,x) ,y)
+                         ,y)))))))))
 
 ;; ===================================================================================================
 
+#|
 (update-current-languages! L)
 
 (define-language current-target
@@ -3164,6 +3169,7 @@
              #:attr [components 1] '())
     (pattern (name:id components:id ...))))
 
+|#
 
 ;; Expand syntax fully, even at the top level
 (define (expand-syntax* stx)
@@ -3178,7 +3184,7 @@
       (lambda () (read)))))
 
 (define-compiler-component closure-conversion)
-(define-compiler-component inline)
+(define-compiler-component optimizer)
 (define-compiler-component mutable-variable-elimination)
 (define-compiler-component debruijn)
 (define-compiler-component parse)
@@ -3196,32 +3202,24 @@
   (make-begin-explicit parse)
   (identify-assigned-variables mutable-variable-elimination)
   purify-letrec
-  inline-expressions
-  optimize-direct-call
-  (convert-assignments mutable-variable-elimination)
-  (uncover-free closure-conversion)
-  raise-toplevel-variables
-  closurify-letrec
-  void-lets
-  (debruijn-indices debruijn)
-  (find-let-depth debruijn)
-  (generate-zo-structs generate-bytecode)
-  (zo-marshal generate-bytecode)
-  bytes->compiled-expression)
+  (inline-expressions optimizer)
+  ;(convert-assignments mutable-variable-elimination)
+  ;(uncover-free closure-conversion)
+  ;raise-toplevel-variables
+  ;closurify-letrec
+  ;void-lets
+  ;(debruijn-indices debruijn)
+  ;(find-let-depth debruijn)
+  ;(generate-zo-structs generate-bytecode)
+  ;(zo-marshal generate-bytecode)
+  ;bytes->compiled-expression
+  )
 
 (module+ test
   (run-all-compiler-tests))
 
-#;
-(module+ test
-  (define code
-    #'(begin (define x 5)
-             x))
-  (define a (compile/1 code))
-  (displayln "trying to debruijn")
-  (define b (compile/16 code))
-  #;(define-values (v1 v2)
-    (nanopass-case (Lsrc top-level-form) a
-                   [(begin* (define-values (,var1) ,expr1)
-                            ,var2)
-                    (values var1 var2)])))
+(define code
+  #'(letrec-values ([(a) (lambda (x) a)])
+      a))
+
+(compile/9 code)

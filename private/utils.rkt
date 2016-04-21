@@ -58,6 +58,7 @@
 
 ; Represents a variable expression.
 ; One variable is bound to another if they point to the same location in memory
+; Variables are not assigned or referenced by default, a pass changes that if it occurs
 (struct variable (name
                   operand
                   srcloc
@@ -74,8 +75,8 @@
 (define (make-variable name
                        #:operand [operand #f]
                        #:source-location [srcloc #f]
-                       #:assigned? [assigned 'unknown]
-                       #:referenced? [ref 'unknown])
+                       #:assigned? [assigned #f]
+                       #:referenced? [ref #f])
   (variable name operand srcloc assigned ref))
 (define current-variable-equal? (make-parameter (lambda (a b) (eq? a b))))
 
