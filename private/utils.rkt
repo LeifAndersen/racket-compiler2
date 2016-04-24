@@ -13,9 +13,12 @@
          (struct-out operand)
          make-operand
          foldable?
-         effect-free?)
+         effect-free?
+         return-true?)
 
-(require rackunit
+(require racket/match
+         racket/set
+         rackunit
          (rename-in racket/base
                     [compile base:compile]
                     [current-compile base:current-compile]))
@@ -82,22 +85,47 @@
 
 (struct operand (exp
                  env
+                 effort-counter
                  value
-                 residualized-for-effect?)
+                 residualized-for-effect?
+                 size
+                 inner-pending?
+                 outer-pending?)
   #:mutable)
-(define (make-operand exp env
+(define (make-operand exp env effort-counter
                       #:value [value #f]
-                      #:residualized-for-effect? [residualized-for-effect? #f])
-  (operand exp env value residualized-for-effect?))
+                      #:residualized-for-effect? [residualized-for-effect? #f]
+                      #:size [size 0]
+                      #:inner-pending? [inner-pending? #f]
+                      #:outer-pending? [outer-pending? #f])
+  (operand exp env effort-counter value residualized-for-effect? size inner-pending? outer-pending?))
 
 ; Determine if this primitive is one that is effect free
 ;   eg, cons, list, cdr, etc.
 ; Symbol -> Boolean
 (define (effect-free? primitive)
-  #f) ;; TODO : It may turn out to be effect free
+  (define effect-free-set
+    (set 'void))
+  (cond
+    [(set-member? effect-free-set primitive) #t]
+    [(foldable? primitive) #t]
+    [else #f]))
+
+; Determins if this primitive is one that will always return true
+;  eg. list, cons
+; Symbol -> Boolean
+(define (return-true? primitive)
+  (define return-true-set
+    (set 'cons 'list))
+  (cond [(set-member? return-true-set primitive) #t]
+        [else #f]))
 
 ; Determine if this primitive is foldable
 ;   eg +, -, etc.
 ; Symbol -> Boolean
 (define (foldable? primitive)
-  #f) ;; TODO
+  (define foldable-set
+    (set '+ '- '* '/ '= '< '> '<= '>=))
+  (cond
+    [(set-member? foldable-set primitive) #t]
+    [else #f]))

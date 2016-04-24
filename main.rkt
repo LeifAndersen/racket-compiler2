@@ -1500,7 +1500,18 @@
   #:mutable
   #:auto-value #f)
 
-(define-pass inline-expressions* : current-target (e context env) -> current-target ()
+(struct counter (value
+                 context
+                 k)
+  #:mutable)
+(define (make-counter value #:context [context #f] #:k [k #f])
+  (counter value context k))
+
+(define current-inline-size-limit (make-parameter 50))
+(define current-inline-effort-limit (make-parameter 100))
+
+(define-pass inline-expressions*
+  : current-target (e context env effort-counter size-counter) -> current-target ()
   (definitions
 
     ;; Environments map source program variables to residual program
@@ -1522,6 +1533,21 @@
                  [opnd (in-list opnd*)])
         (extend-env env x opnd)))
 
+    ;; Active counters have a continuation and context
+    (define (active-counter? counter)
+      (and (counter? counter) (counter-context counter)))
+
+    ;; Passive counters are counters with #f as a context, and error as a continuation
+    (define passive-counter-default-value 1000)
+    (define (make-passive-counter)
+      (make-counter passive-counter-default-value
+                    #:context #f
+                    #:k (lambda x
+                          (error 'inline-expressions
+                                 "Tried to call continuation on a passive counter"))))
+    (define (passive-counter-value counter)
+      (- passive-counter-default-value (counter-value counter)))
+
     ;; Determins if the amount of operands passed into a function
     ;;    matches the amount accepted by the formals
     ;; Formals Opearnds -> Boolean
@@ -1541,6 +1567,9 @@
                      [,v #t]
                      [,lambda #t]
                      [(primitive ,id) #t]
+                     [(#%plain-app (primitive ,id) (quote ,datum) ...)
+                      (guard (effect-free? id))
+                      #t]
                      [else #f]))
 
     ; Constructs begin expressions, flattening them if possible
@@ -1559,7 +1588,7 @@
     ;;   Empty lets are removed, assigned but not referenced
     ;;   variables are kept only for effect.
     ;; (Listof Var-Exprs) (Listof Operands) Expr -> Expr
-    (define (make-let vars operands body)
+    (define (make-let vars operands body size-counter)
       (define (set-effect! result)
         (for-each (curryr set-operand-residualized-for-effect?! #t) operands)
         result)
@@ -1574,7 +1603,7 @@
                             (set-operand-residualized-for-effect?! val #t)))
                         (cond
                           [(set-member? vars v)
-                           (value-visit-operand! (dict-ref var-map v))]
+                           (score-value-visit-operand! (dict-ref var-map v) size-counter)]
                           [else body])]
                        [else
                         (for ([var (in-list vars)])
@@ -1586,7 +1615,7 @@
                                      #:when (and (variable-referenced? i)
                                                  (variable-assigned? i)))
                             (if (variable-referenced? i)
-                                (cons i (value-visit-operand! j))
+                                (cons i (score-value-visit-operand! j size-counter))
                                 (cons i `(primitive void)))))
                         (if (dict-empty? visited-vars)
                             body
@@ -1618,85 +1647,121 @@
                      [else #f]))
 
     ;; Performs variable inlining
-    ;; Variable Context Env -> Expr
-    (define (inline-ref v context env)
-      (match context
-        ['effect `(primitive void)]
-        [_
-         (define v* ((env-lookup env) v))
-         (define opnd (variable-operand v*))
-         (cond
-           [opnd
-            (value-visit-operand! opnd)
-            (cond
-              [(variable-assigned? v) (residualize-ref v*)]
-              [else
-               (define rhs (result-expr (operand-value opnd)))
-               (nanopass-case (current-target expr) rhs
-                              [(quote ,datum) rhs]
-                              [,v**
-                               (cond
-                                 [(variable-assigned? v**) (residualize-ref)]
-                                 [else
-                                  (define v-opnd (variable-operand v))
-                                  (if (and v-opnd (operand-value v-opnd))
-                                      (copy v** v-opnd context)
-                                      (residualize-ref v**))])]
-                              [else (copy v opnd context)])])]
-           [else (residualize-ref v*)])]))
-
-
+    ;; Variable Context Env Counter Counter -> Expr
+    (define (inline-ref v context env effort-counter size-counter)
+      (with-output-language (current-target expr)
+        (match context
+          ['effect `(primitive void)]
+          [_
+           (define v* ((env-lookup env) v))
+           (define opnd (variable-operand v*))
+           (cond
+             [(and opnd (not (operand-inner-pending? opnd)))
+              (dynamic-wind
+               (lambda () (set-operand-inner-pending?! opnd #t))
+               (lambda () (value-visit-operand! opnd))
+               (lambda () (set-operand-inner-pending?! opnd #f)))
+              (cond
+                [(variable-assigned? v) (residualize-ref v* size-counter)]
+                [else
+                 (define rhs (result-expr (operand-value opnd)))
+                 (nanopass-case (current-target expr) rhs
+                                [(quote ,datum) rhs]
+                                [,v**
+                                 (cond
+                                   [(variable-assigned? v**) (residualize-ref v* size-counter)]
+                                   [else
+                                    (define v-opnd (variable-operand v))
+                                    (if (and v-opnd (operand-value v-opnd))
+                                        (copy v** v-opnd context effort-counter size-counter)
+                                        (residualize-ref v** size-counter))])]
+                                [else (copy v opnd context effort-counter size-counter)])])]
+             [else (residualize-ref v* size-counter)])])))
+      
     ;; Helper for inline-ref, tries to inline references to variables
-    ;; Variable Operand Context -> Variable
-    (define (copy v opnd context)
+    ;; Variable Operand Context Counter Counter -> Variable
+    (define (copy v opnd context effort-counter size-counter)
       (with-output-language (Lsrc expr)
         (define rhs (result-expr (operand-value opnd)))
         (nanopass-case (current-target expr) rhs
                        [(#%plain-lambda ,formals ,abody)
                         (match context
-                          ['value (residualize-ref v)]
+                          ['value (residualize-ref v size-counter)]
                           ['test `'#t]
-                          [(struct* app ()) (inline rhs context empty-env)])]
+                          [(struct* app ())
+                           (or (and (not (operand-outer-pending? opnd))
+                                    (dynamic-wind
+                                     (lambda () (set-operand-outer-pending?! opnd #t))
+                                     (lambda ()
+                                       (let/cc abort
+                                         (define limit (if (active-counter? size-counter)
+                                                           (counter-value size-counter)
+                                                           (current-inline-size-limit)))
+                                         (inline rhs context empty-env
+                                                 (if (active-counter? effort-counter)
+                                                     effort-counter
+                                                     (make-counter (current-inline-effort-limit)
+                                                                   #:context context
+                                                                   #:k abort))
+                                                 (make-counter limit #:context context #:k abort))))
+                                     (lambda () (set-operand-outer-pending?! opnd #f))))
+                               (residualize-ref v size-counter))])]
                        [(primitive ,id)
                         (match context
                           ['value rhs]
                           ['test `'#t]
-                          [(struct* app ()) (fold-prim id context)])]
-                       [else (residualize-ref v)])))
+                          [(struct* app ()) (fold-prim id context size-counter)])]
+                       [else (residualize-ref v size-counter)])))
  
     ;; If an application has been inlined, keep around
     ;;   the expresssions for side effects (in a begin form)
     ;;   otherwise just return the call
-    ;; Expr (Listof Operands) Context Env -> Expr
-    (define (inline-call e operands context env)
+    ;; Expr (Listof Operands) Context Env Counter Counter -> Expr
+    (define (inline-call e operands context env effort-counter size-counter)
       (define context* (app operands context))
-      (define e* (inline-expressions e context* env))
+      (define e* (inline-expressions e context* env effort-counter size-counter))
       (if (app-inlined? context*)
-          (residualize-operands operands e*)
+          (residualize-operands operands e* size-counter)
           (with-output-language (current-target expr)
-            `(#%plain-app ,e* ,(map value-visit-operand! operands) ...))))
+            `(#%plain-app ,e*
+                          ,(map (curryr score-value-visit-operand! size-counter)
+                                operands) ...))))
 
     ;; Try to inline an expression to a value. Memoizes the result,
     ;;    returns the resulting expression.
     ;; Operand -> Expr
     (define (value-visit-operand! opnd)
       (or (operand-value opnd)
-          (let ([e (inline-expressions (operand-exp opnd)
-                                       'value
-                                       (operand-env opnd))])
+          (let ()
+            (define size-counter (make-passive-counter))
+            (define e (inline-expressions (operand-exp opnd)
+                                          'value
+                                          (operand-env opnd)
+                                          (operand-effort-counter opnd)
+                                          size-counter))
             (set-operand-value! opnd e)
+            (set-operand-size! opnd (passive-counter-value size-counter))
             e)))
+
+    ;; A varient of value-visit-operand! that also affects the value
+    ;;   of the size-counter given to it.
+    ;; Opernad Counter -> Expr
+    (define (score-value-visit-operand! opnd size-counter)
+      (define val (value-visit-operand! opnd))
+      (decrement! size-counter (operand-size opnd))
+      val)
 
     ;; Sets a variable as being referenced
     ;; Ref -> Ref
-    (define (residualize-ref v)
+    (define (residualize-ref v size-counter)
+      (decrement! size-counter 1)
       (set-variable-referenced?! v #t)
       v)
 
     ;; Inlines a call, keeping around operands only when needed
     ;;   for effect
-    ;; (Listof Operands) Expr -> Expr
-    (define (residualize-operands operands e)
+    ;; (Listof Operands) Expr Counter -> Expr
+    (define (residualize-operands operands e size-counter)
       (define operands* (filter operand-residualized-for-effect? operands))
       (cond [(null? operands*) e]
             [else
@@ -1704,12 +1769,19 @@
                                   (or (operand-value o)
                                       (inline-expressions (operand-exp o)
                                                           'effect
-                                                          (operand-env o)))))
-             (make-begin operands** e)]))
+                                                          (operand-env o)
+                                                          (operand-effort-counter o)
+                                                          size-counter))))
+             (define operands***
+               (for/list ([o (in-list operands**)]
+                          #:unless (simple? o))
+                 (decrement! size-counter (operand-size o))
+                 o))
+             (if (null? operands***) e (make-begin operands*** e))]))
 
     ;; Performs the actual inlining
     ;; Lambda-Expr App-Context Env -> Exp
-    (define (inline proc context env)
+    (define (inline proc context env effort-counter size-counter)
       (nanopass-case (current-target lambda) proc
                      [(#%plain-lambda ,formals
                                       (assigned (,v ...) ,expr))
@@ -1724,34 +1796,42 @@
                            (append single-opnds
                                    ;; TODO, does this operand need to be
                                    ;;   residulized for effect?
+                                   ;;   or recalculate effort counter?
                                    (list
                                     (make-operand
                                      (with-output-language (current-target expr)
-                                       `(#%plain-app (primitive list) ,rest-opnds ...))
+                                       `(#%plain-app (primitive list)
+                                                     ,(map operand-exp rest-opnds) ...))
                                      (apply hash-union (hash)
-                                            (map operand-env rest opnds)))))]
+                                            (map operand-env rest-opnds))
+                                     (operand-effort-counter (first rest-opnds)))))]
                           [else opnds]))
                       (define env* (extend-env* env formals* opnds*))
-                      (define body (inline-expressions expr (app-context context) env*))
-                      (define result (make-let formals* opnds* body))
+                      (define body (inline-expressions expr
+                                                       (app-context context)
+                                                       env*
+                                                       effort-counter
+                                                       size-counter))
+                      (define result (make-let formals* opnds* body size-counter))
                       (set-app-inlined?! context #t)
                       result]))
 
     ;; Does constant fold on primitives (if possible)
-    ;; ID Context -> Expr
-    (define (fold-prim prim context)
+    ;; ID Context Counter -> Expr
+    (define (fold-prim prim context size-counter)
       (define operands (app-operands context))
       (with-output-language (current-target expr)
         (define result
           (or (and (effect-free? prim)
                    (match (app-context context)
                      ['effect `(primitive void)]
-                     ['test (and (not (equal? prim `(quote #f))) `(quote #t))]
+                     ['test (and (return-true? prim) `(quote #t))]
                      [else #f]))
               (and (foldable? prim)
                    (let ([vals (map value-visit-operand! operands)])
                      (define-values (consts? operands*)
-                       (for/fold ([const-vals #t])
+                       (for/fold ([const-vals #t]
+                                  [ops null])
                                  ([v (in-list vals)])
                          (values
                           (and const-vals
@@ -1762,98 +1842,164 @@
                            (nanopass-case (current-target expr) v
                                           [(quote ,datum) datum]
                                           [else #f])
-                           prim))))
+                           ops))))
                      (define operands** (reverse operands*))
                      (and consts?
-                          (with-handlers ([exn? (lambda (x) #f)])
+                          (with-handlers ([exn? (lambda (x) (displayln "inline failed") #f)])
                             `(quote ,(parameterize ([current-namespace (make-base-namespace)])
                                        (eval (cons prim operands**))))))))))
-        (if result
-            (begin
-              (for-each (curryr set-operand-residualized-for-effect?! #t) operands)
-              (set-app-inlined?! context #t)
-              result)
-            prim))))
+        (cond
+          [result (for-each (curryr set-operand-residualized-for-effect?! #t) operands)
+                  (set-app-inlined?! context #t)
+                  result]
+          [else (decrement! size-counter 1)
+                `(primitive ,prim)])))
 
-  (Expr : expr (e context env) -> expr ()
+    ;; Resets the inlined process inside of `app` contexts
+    ;;   Recurse all the way to the outer most context.
+    ;; App-Context -> Void
+    (define (reset-integrated! context)
+      (set-app-inlined?! context #f)
+      (define context* (app-context context))
+      (when (app? context*)
+        (reset-integrated! context)))
+    
+    ;; Decrements the given counter by amount steps
+    ;;   If the result goes below 0, then undo the attempt at inlining
+    ;;   and call the counters continuation.
+    ;; Counter Number -> Void
+    (define (decrement! counter amount)
+      (define n (- (counter-value counter) amount))
+      (set-counter-value! counter n)
+      (when (< n 0)
+        (when (app? (counter-context counter))
+          (reset-integrated! (counter-context counter)))
+        ((counter-k counter) #f))))
+
+  (Expr : expr (e [context context]
+                  [env env]
+                  [effort-counter effort-counter]
+                  [size-counter size-counter])
+        -> expr ()
         [(quote ,datum) `(quote ,datum)]
-        [,v (inline-ref v context env)]
-        [(begin ,[expr1 'effect env -> expr1] ... ,[expr2 context env -> expr2])
+        [,v (inline-ref v context env effort-counter size-counter)]
+        [(begin ,[expr1 'effect env effort-counter size-counter -> expr1] ...
+                ,[expr2 context env -> expr2])
          (make-begin expr1 expr2)]
-        [(if ,[expr1 'test env -> expr1] ,expr2 ,expr3)
+        [(if ,[expr1 'test env effort-counter size-counter -> expr1] ,expr2 ,expr3)
          (nanopass-case (current-target expr) (result-expr expr1)
                         [(quote ,datum)
-                         (make-begin expr1
-                                     (inline-expressions `(if ',datum ,expr2 ,expr3)
+                         (make-begin (list expr1)
+                                     (inline-expressions (if datum expr2 expr3)
                                                          context
-                                                         env))]
+                                                         env
+                                                         effort-counter
+                                                         size-counter))]
                         [else
                          (define context* (if (app? context) 'value context))
-                         (define expr2* (inline-expressions expr2 context* env))
-                         (define expr3* (inline-expressions expr3 context* env))
-                         (if (contextual-equal? expr2* expr3* context*)
-                             (make-begin expr1 expr2*)
-                             `(if ,expr1 ,expr2* ,expr3*))])]
+                         (define expr2*
+                           (inline-expressions expr2 context* env effort-counter size-counter))
+                         (define expr3*
+                           (inline-expressions expr3 context* env effort-counter size-counter))
+                         (cond [(contextual-equal? expr2* expr3* context*)
+                                (make-begin (list expr1) expr2*)]
+                               [else
+                                (decrement! size-counter 1)
+                                `(if ,expr1 ,expr2* ,expr3*)])])]
         [(set!-values (,v ...) ,expr)
          (define v* (map (env-lookup env) v))
-         (make-begin
-          (cond
-            [(andmap variable-referenced? v*)
-             (define expr* (inline-expressions expr 'value env))
-             (map (curryr set-variable-assigned?! #t) v*)
-             `(set!-values (,v* ...) ,expr*)]
-            [else
-             (inline-expressions expr 'effect env)])
-          `(#%plain-app (primitive void)))]
+         (cond
+           [(ormap variable-referenced? v*)
+            (define expr* (inline-expressions expr 'value env effort-counter size-counter))
+            (map (curryr set-variable-assigned?! #t) v*)
+            `(set!-values (,v* ...) ,expr*)]
+           [else
+            (make-begin
+             (list
+              (inline-expressions expr 'effect env effort-counter size-counter))
+             `(#%plain-app (primitive void)))])]
         [(#%plain-app ,expr ,expr* ...)
-         (inline-call expr (map (curryr make-operand env) expr*) context env)]
+         (inline-call expr
+                      (map (curryr make-operand env effort-counter) expr*)
+                      context
+                      env
+                      effort-counter
+                      size-counter)]
         [(primitive ,id)
          (match context
            ['effect `'#t]
            ['test `'#t]
-           ['value e]
-           [(struct* app ()) (fold-prim id context)])]
+           ['value (decrement! size-counter 1) e]
+           [(struct* app ()) (fold-prim id context size-counter)])]
+        [(let ([,v* ,expr*] ...)
+           (begin-set!
+             (assigned (,v ...)
+                       ,expr)))
+         (inline-expressions
+          `(#%plain-app (#%plain-lambda (,v* ...) ,expr)
+                        ,expr* ...)
+          context env effort-counter size-counter)]
         [(letrec ([,v ,lambda] ...)
            ,expr)
-         (define operands (map (curryr make-operand env) lambda))
-         (for ([i (in-list v)]
+         (define env* (extend-env* env v (make-list (length v) #f)))
+         (define v* (map (env-lookup env*) v))
+         (define operands (map (curryr make-operand env* effort-counter) lambda))
+         (for ([i (in-list v*)]
                [j (in-list operands)])
            (set-variable-operand! i j))
-         (define expr* (inline-expressions expr context env))
-         (displayln "got here")
+         (define expr* (inline-expressions expr context env* effort-counter size-counter))
          (define filtered-vars
-           (for/list ([i (in-list v)]
+           (for/list ([i (in-list v*)]
                       [j (in-list operands)]
                       #:when (variable-referenced? i))
              (cons i j)))
-         (if (or (null? filtered-vars)
-                 (nanopass-case (current-target expr) expr
-                                [(quote ,datum) #t]
-                                [(primitive ,id) #t]
-                                [else #f]))
-             expr
-             `(letrec ([,(dict-keys filtered-vars)
-                        ,(dict-values filtered-vars)] ...)
-                ,expr))])
+         (cond [(or (null? filtered-vars)
+                    (nanopass-case (current-target expr) expr*
+                                   [(quote ,datum) #t]
+                                   [(primitive ,id) #t]
+                                   [else #f]))
+                expr*]
+               [else
+                (decrement! size-counter 1)
+                `(letrec ([,(dict-keys filtered-vars)
+                           ,(map operand-value (dict-values filtered-vars))] ...)
+                   ,expr)])])
 
-  (Lambda : lambda (e context env) -> lambda ()
+  (Lambda : lambda (e [context context]
+                      [env env]
+                      [effort-counter effort-counter]
+                      [size-counter size-counter])
+          -> lambda ()
           [(#%plain-lambda ,formals (assigned (,v ...) ,expr))
            (match context
              ['effect `'#t]
              ['test `'#t]
              ['value
+              (decrement! size-counter 1)
               (define formals* (formals->identifiers current-target formals))
               (define env* (extend-env* env formals* (make-list (length formals*) #f)))
-              `(#%plain-lambda ,formals (assigned (,v ...) ,(inline-expressions expr 'value env)))]
-             [(struct* app ()) (inline e context env)])])
+              `(#%plain-lambda ,formals
+                               (assigned
+                                (,v ...)
+                                ,(inline-expressions expr 'value env* effort-counter size-counter)))]
+             [(struct* app ()) (inline e context env effort-counter size-counter)])])
 
+  (TopLevelForm : top-level-form (e [context context]
+                                    [env env]
+                                    [effort-counter effort-counter]
+                                    [size-counter size-counter])
+                -> top-level-form ())
+  
   (begin
-    (printf "~nInlining: e: ~a ctx: ~a env: ~a~n" e context env)
-    (sleep 1)
-    (Expr e context env)))
+    (decrement! effort-counter 1)
+    (TopLevelForm e context env effort-counter size-counter)))
 
-(define (inline-expressions e [context 'value] [env (hash)])
-  (inline-expressions* e context env))
+(define (inline-expressions e
+                            [context 'value]
+                            [env (hash)]
+                            [effort-counter (make-counter (current-inline-effort-limit))]
+                            [size-counter (make-counter (current-inline-size-limit))])
+  (inline-expressions* e context env effort-counter size-counter))
 
 (splicing-let-syntax ([current-target (syntax-local-value #'current-target-top)])
   (module+ test
@@ -1873,18 +2019,23 @@
         (current-compile #'((lambda (x) x) (lambda (y) y)))
         `(#%plain-lambda (,y) (assigned () ,y)))
        (check-equal?
+        (current-compile #'(let ([x 5]
+                                 [y 6])
+                             (+ x y)))
+        `'11)
+       (check-equal?
         (current-compile #'(letrec-values ([(a) (lambda (x) a)])
                              a))
         `(letrec ([,a (#%plain-lambda (,x) (assigned () ,a))])
            ,a))
-       #;(check-equal?
+       (check-equal?
         (current-compile #'(letrec-values ([(a) (lambda (x) b)]
                                            [(b) (lambda (y) a)])
                              (a b)))
         `(letrec ([,a (#%plain-lambda (,x) (assigned () ,b))]
                   [,b (#%plain-lambda (,y) (assigned () ,a))])
            (#%plain-app ,a ,b)))
-       #;(check-equal?
+       (check-equal?
         (current-compile #'(letrec-values ([(a) 5]
                                            [(b c) (values 6 7)])
                              (+ a b c)))
@@ -1896,13 +2047,13 @@
              (set!-values (,b ,c) (#%plain-app (primitive values) '6 '7))
              (assigned (,c ,b ,a)
                        (#%plain-app (primitive +) ,a ,b ,c)))))
-       #;(check-equal?
+       (check-equal?
         (current-compile #'(let ([x (if #t 5 6)])
                              (set! x (+ x 1))))
-        `(let ([,x (if '#t '5 '6)])
+        `(let ([,x '5])
            (begin-set!
              (assigned (,x) (set!-values (,x) (#%plain-app (primitive +) ,x '1))))))
-       #;(check-equal?
+       (check-equal?
         (current-compile #'(let-values ([(x y) (values 1 2)]
                                         [(z) 3])
                              (set! x 5)
@@ -1914,10 +2065,8 @@
              (set!-values (,x ,y) (#%plain-app (primitive values) '1 '2))
              (set!-values (,z) '3)
              (assigned (,x)
-                       (begin
-                         (set!-values (,x) '5)
-                         (#%plain-app (primitive +) ,y ,z))))))
-       #;(check-equal?
+                       (#%plain-app (primitive +) ,y ,z)))))
+       (check-equal?
         (current-compile #'(let-values ([(x y) (values 1 2)])
                              (set! x y)
                              y))
@@ -1926,13 +2075,17 @@
            (begin-set!
              (set!-values (,x ,y) (#%plain-app (primitive values) '1 '2))
              (assigned (,x)
-                       (begin
-                         (set!-values (,x) ,y)
-                         ,y)))))))))
+                       ,y))))
+       (check-equal?
+        (current-compile #'(letrec ([fact (lambda (x)
+                                                 (if (x . <= . 0)
+                                                     1
+                                                     (* x (fact (- x 1)))))])
+                                  (fact 5)))
+        `'120)))))
 
 ;; ===================================================================================================
 
-#|
 (update-current-languages! L)
 
 (define-language current-target
@@ -1982,7 +2135,8 @@
             `(,(map (lookup-env env) v) ...)]
            [(,v ,v* ... . ,v2)
             `(,((lookup-env env) v) ,(map (lookup-env env) v*) ... . ,((lookup-env env) v2))])
-  (Lambda : lambda (e [env '()]) -> lambda ()
+  (Lambda : lambda (e [env '()]) -> expr ()
+          [(quote ,datum) `(quote ,datum)]
           [(#%plain-lambda ,formals
                            (assigned (,v ...) ,expr))
            (define env* (extend-env env v))
@@ -2062,9 +2216,7 @@
             (set!-values (,x ,y) (#%plain-app (primitive values) '1 '2))
             (begin
               (set!-values (,x) (#%box ,x))
-              (begin
-                (set!-boxes (,x) ,y)
-                ,y)))))))))
+              ,y))))))))
 
 ;; ===================================================================================================
 
@@ -2240,8 +2392,8 @@
                               x)))
        `(program () (let ([,x '5])
                       (#%plain-lambda (,y)
-                                      (free (,x) ()
-                                            ,x)))))
+                                      (free () ()
+                                            '5)))))
       (check-equal?
        (current-compile #'(begin
                             (define x 5)
@@ -2258,12 +2410,11 @@
                             (set! x 6)))
        `(program (,x) (begin*
                         (define-values (,x) '5)
-                        (set!-values (,x) '6))))
+                        (#%plain-app (primitive void)))))
       (check-equal?
        (current-compile #'(letrec ([f (lambda (x) x)])
                             (f 12)))
-       `(program () (letrec ([,f (#%plain-lambda (,x) (free () () ,x))])
-                      (#%plain-app ,f '12))))
+       `(program () '12))
       (check-equal?
        (current-compile #'(begin
                             (define x 5)
@@ -2455,14 +2606,13 @@
   (module+ test
     (update-current-compile!)
     (block
-    (define x (make-variable 'x))
-    (define f (make-variable 'f))
-    (define-compiler-test current-target compilation-top
-      (check-equal?
-       (current-compile #'(letrec ([f (lambda (x) x)])
-                            (f 12)))
-       `(program () (let ([,f (closure ,f (#%plain-lambda (,x) (free () () ,x)))])
-                      (#%plain-app ,f '12))))))))
+     (define x (make-variable 'x))
+     (define f (make-variable 'f))
+     (define-compiler-test current-target compilation-top
+       (check-equal?
+        (current-compile #'(letrec ([f (lambda (x) x)])
+                             (f 12)))
+        `(program () '12))))))
 
 ;; ===================================================================================================
 
@@ -2504,16 +2654,12 @@
     (define-compiler-test current-target compilation-top
       (check-equal?
        (current-compile #'(let ([x 1]) x))
-       `(program () (let ([,x '1]) ,x)))
+       `(program () '1))
       (check-equal?
        (current-compile #'(let ([x 1]
                                 [y 2])
                             (+ x y)))
-       `(program () (let-void (,x ,y)
-                              (begin
-                                (set!-values (,x) '1)
-                                (set!-values (,y) '2)
-                                (#%plain-app (primitive +) ,x ,y)))))
+       `(program () '3))
       (check-equal?
        (current-compile #'(let-values ([(x y) (values 1 2)]
                                        [(z) 3])
@@ -2725,16 +2871,12 @@
       (check-equal?
        (current-compile #'(let ([x 5])
                        (lambda (y . z) x)))
-       `(program () (let-one '5 (#%plain-lambda 2 #t (0) () 0))))
+       `(program () (let-one '5 (#%plain-lambda 2 #t () () '5))))
       (check-equal?
        (current-compile #'(let ([x 5]
                            [y 6])
                        (+ x y)))
-       `(program () (let-void 2
-                              (begin
-                                (set!-values 1 0 '5)
-                                (set!-values 1 1 '6)
-                                (#%plain-app (primitive ,(dict-ref primitive-table* '+)) 2 3)))))
+       `(program () '11))
       (check-equal?
        (current-compile #'(begin
                        (define x 5)
@@ -2744,15 +2886,16 @@
                        (#%plain-app (primitive ,(dict-ref primitive-table* '+)) (#%top 2 0) '5))))
       (check-equal?
        (current-compile #'(begin
-                       (define x 5)
-                       (lambda (y)
-                         y x)))
+                            (define x 5)
+                            (lambda (y)
+                              y x)))
        `(program (,x*) (begin*
-                       (define-values (0) '5)
-                       (#%expression
-                        (#%plain-lambda 1 #f (0) (0)
-                                        (begin 1 (#%top 0 0)))))))
-      (check-equal?
+                         (define-values (0) '5)
+                         (#%expression
+                          (#%plain-lambda 1 #f (0) (0)
+                                          (#%top 0 0))))))
+      ;; TODO
+      #;(check-equal?
        (current-compile #'(begin
                             (module foo racket
                               (#%plain-module-begin
@@ -2896,7 +3039,7 @@
                        (#%plain-lambda 1 #f () () 10
                                        (let-one '5 (#%plain-app
                                                     (primitive ,(dict-ref primitive-table* '+))
-                                                    3 2))))))
+                                                    3 '5))))))
       (check-equal?
        (current-compile #'(if (= 5 6)
                               (let ([x '5]
@@ -2904,13 +3047,7 @@
                                 y)
                               (let ([x '6])
                                 x)))
-       `(program 2 () (if (#%plain-app (primitive ,(dict-ref primitive-table* '=)) '5 '6)
-                          (let-void 2
-                                    (begin
-                                      (set!-values 1 0 '5)
-                                      (set!-values 1 1 '6)
-                                      1))
-                          (let-one '6 0)))))))
+       `(program 0 () '6)))))
 
 (define tmp-prefix
   (zo:prefix 0 '() '() 'missing))
@@ -3169,8 +3306,6 @@
              #:attr [components 1] '())
     (pattern (name:id components:id ...))))
 
-|#
-
 ;; Expand syntax fully, even at the top level
 (define (expand-syntax* stx)
   (parameterize ([current-namespace (make-base-namespace)])
@@ -3217,9 +3352,3 @@
 
 (module+ test
   (run-all-compiler-tests))
-
-(define code
-  #'(letrec-values ([(a) (lambda (x) a)])
-      a))
-
-(compile/9 code)
