@@ -3338,16 +3338,16 @@
   (identify-assigned-variables mutable-variable-elimination)
   purify-letrec
   (inline-expressions optimizer)
-  ;(convert-assignments mutable-variable-elimination)
-  ;(uncover-free closure-conversion)
-  ;raise-toplevel-variables
-  ;closurify-letrec
-  ;void-lets
-  ;(debruijn-indices debruijn)
-  ;(find-let-depth debruijn)
-  ;(generate-zo-structs generate-bytecode)
-  ;(zo-marshal generate-bytecode)
-  ;bytes->compiled-expression
+  (convert-assignments mutable-variable-elimination)
+  (uncover-free closure-conversion)
+  raise-toplevel-variables
+  closurify-letrec
+  void-lets
+  (debruijn-indices debruijn)
+  (find-let-depth debruijn)
+  (generate-zo-structs generate-bytecode)
+  (zo-marshal generate-bytecode)
+  bytes->compiled-expression
   )
 
 (module+ test
