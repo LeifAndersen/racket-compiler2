@@ -14,9 +14,11 @@
          make-operand
          foldable?
          effect-free?
-         return-true?)
+         return-true?
+         formals->identifiers
+         formals-rest?)
 
-(require racket/match
+(require nanopass/base
          racket/set
          rackunit
          (rename-in racket/base
@@ -129,3 +131,19 @@
   (cond
     [(set-member? foldable-set primitive) #t]
     [else #f]))
+
+; Grabs set of identifiers out of formals non-terminal in a language
+; lang formals -> (listof identifiers)
+(define-syntax-rule (formals->identifiers lang fmls)
+  (nanopass-case (lang formals) fmls
+                 [,v                       (list v)]
+                 [(,v (... ...))           v]
+                 [(,v ,v* (... ...) . ,v2) (set-union (list v v2) v*)]))
+
+; lang formals -> boolean
+(define-syntax-rule (formals-rest? lang fmls)
+  (nanopass-case (lang formals) fmls
+                 [,v                       #t]
+                 [(,v (... ...))           #f]
+                 [(,v ,v* (... ...) . ,v2) #t]))
+

@@ -53,7 +53,7 @@ before_script:
 # packages without it getting stuck on a confirmation prompt.
 script:
  - raco pkg install --deps search-auto
- - raco test -x -p racket-compiler2
+ - raco test -x private/tests.rkt
  - raco pkg install --deps search-auto doc-coverage
  - raco doc-coverage main.rkt
 
