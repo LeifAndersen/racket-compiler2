@@ -11,7 +11,6 @@
          racket/list
          racket/function
          syntax/strip-context
-         (prefix-in ut: "utils.rkt")
          (for-syntax racket/base
                      syntax/parse
                      racket/syntax
@@ -20,11 +19,6 @@
          "languages.rkt"
          "utils.rkt"
          "components.rkt")
-
-(define (make-operand opnd env effort-counter)
-  (ut:make-operand opnd env effort-counter))
-
-(current-variable-printer debug-variable-printer)
 
 ;; App conetxt, for storing valid functions
 ;; Valid contexts are 'test 'value 'effect, and other

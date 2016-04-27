@@ -82,25 +82,3 @@
   (generate-zo-structs generate-bytecode)
   (zo-marshal generate-bytecode)
   bytes->compiled-expression)
-
-
-(define code
-  #;#'(letrec ([fact (lambda (x)
-                     (if (<= x 0)
-                         1
-                         (* x (fact (- x 1)))))])
-      (fact 5))
-  #;#'(lambda (x y)
-      (set! x y)
-      (list x y))
-  #;#'(let ([x 5])
-      (set! x 6)
-      x)
-  #;#'((lambda (x) x)
-     (lambda (y) y))
-  #'(letrec-values ([(a) 5]
-                    [(b c) (values 6 7)])
-      (+ a b c)))
-
-;(compile/9 code)
-;(compile/10 code)
