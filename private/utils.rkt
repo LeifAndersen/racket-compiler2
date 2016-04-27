@@ -9,6 +9,8 @@
          datum?
          (struct-out variable)
          make-variable
+         debug-variable-printer
+         current-variable-printer
          current-variable-equal?
          (struct-out operand)
          make-operand
@@ -20,6 +22,7 @@
 
 (require nanopass/base
          racket/set
+         racket/struct
          rackunit
          (rename-in racket/base
                     [compile base:compile]
@@ -72,7 +75,7 @@
   #:mutable
   #:methods gen:custom-write
   [(define (write-proc data port mode)
-     (fprintf port "#(variable: ~a)" (variable-name data)))]
+     ((current-variable-printer) data port mode))]
   #:methods gen:equal+hash
   [(define (equal-proc a b t) ((current-variable-equal?) a b))
    (define (hash-proc v t) (eq-hash-code v))
@@ -83,7 +86,20 @@
                        #:assigned? [assigned #f]
                        #:referenced? [ref #f])
   (variable name operand srcloc assigned ref))
+(define debug-variable-printer
+  (make-constructor-style-printer
+   (lambda (obj) 'variable)
+   (lambda (obj) (list (variable-name obj)
+                       (variable-operand obj)
+                       (variable-assigned? obj)
+                       (variable-referenced? obj)))))
+  
 (define current-variable-equal? (make-parameter (lambda (a b) (eq? a b))))
+(define current-variable-printer
+  (make-parameter
+   (make-constructor-style-printer
+    (lambda (obj) 'variable)
+    (lambda (obj) (list (variable-name obj))))))
 
 (struct operand (exp
                  env
