@@ -1230,7 +1230,8 @@
                        [(define-values (,eni ...) ,[expr depth])
                         (values `(define-values (,eni ...) ,expr) depth)])
   (CompilationTop : compilation-top (e) -> compilation-top ()
-                  [(program (,binding ...) ,[top-level-form depth])                   `(program ,depth (,binding ...) ,top-level-form)]))
+                  [(program (,binding ...) ,[top-level-form depth])
+                   `(program ,depth (,binding ...) ,top-level-form)]))
 
 (define tmp-prefix
   (zo:prefix 0 '() '() 'missing))
