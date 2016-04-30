@@ -108,15 +108,15 @@
                  residualized-for-effect?
                  size
                  inner-pending?
-                 outer-pending?)
+                 outer-pending)
   #:mutable)
 (define (make-operand exp env effort-counter
                       #:value [value #f]
                       #:residualized-for-effect? [residualized-for-effect? #f]
                       #:size [size 0]
                       #:inner-pending? [inner-pending? #f]
-                      #:outer-pending? [outer-pending? #f])
-  (operand exp env effort-counter value residualized-for-effect? size inner-pending? outer-pending?))
+                      #:outer-pending [outer-pending 10])
+  (operand exp env effort-counter value residualized-for-effect? size inner-pending? outer-pending))
 
 ; Determine if this primitive is one that is effect free
 ;   eg, cons, list, cdr, etc.

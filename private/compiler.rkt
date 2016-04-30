@@ -1,39 +1,12 @@
-#lang racket
+#lang racket/base
 
 (provide (all-defined-out))
 
-(require (except-in nanopass/base
-                    define-language
-                    define-pass)
-         (rename-in nanopass/base
-                    [define-language nanopass:define-language]
-                    [define-pass nanopass:define-pass])
-         syntax/parse
-         racket/match
-         racket/set
-         racket/dict
-         racket/hash
-         racket/port
-         racket/list
-         racket/function
-         racket/bool
-         racket/stxparam
-         racket/stxparam-exptime
-         racket/block
-         racket/splicing
+(require racket/port
          compiler/zo-marshal
          syntax/toplevel
-         syntax/strip-context
-         rackunit
-         (prefix-in zo: compiler/zo-structs)
          (rename-in racket/base
-                    [compile base:compile]
-                    [current-compile base:current-compile])
-         (for-syntax racket/base
-                     syntax/parse
-                     racket/syntax
-                     racket/stxparam
-                     racket/stxparam-exptime)
+                    [compile base:compile])
          "languages.rkt"
          "passes.rkt"
          "optimizer.rkt"

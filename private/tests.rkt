@@ -493,7 +493,7 @@
                              (a b)))
         `(letrec ([,a (#%plain-lambda (,x) (assigned () ,b))]
                   [,b (#%plain-lambda (,y) (assigned () ,a))])
-           (#%plain-app ,a ,b)))
+           ,b))
        (check-equal?
         (current-compile #'(letrec-values ([(a) 5]
                                            [(b c) (values 6 7)])
@@ -535,8 +535,7 @@
              (set!-values (,x ,y) (#%plain-app (primitive values) '1 '2))
              (assigned (,x)
                        ,y))))
-       ;; TODO, this test
-       #;(check-equal?
+       (check-equal?
         (current-compile #'(letrec ([fact (lambda (x)
                                                  (if (x . <= . 0)
                                                      1
