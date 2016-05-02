@@ -25,13 +25,13 @@
     (with-input-from-bytes zo
       (lambda () (read)))))
 
-(define-compiler-component closure-conversion)
-(define-compiler-component optimizer)
-(define-compiler-component mutable-variable-elimination)
-(define-compiler-component debruijn)
-(define-compiler-component parse)
-(define-compiler-component generate-bytecode)
-(define-compiler-component modules)
+(define closure-conversion (make-compiler-component))
+(define optimizer (make-compiler-component))
+(define mutable-variable-elimination (make-compiler-component))
+(define debruijn (make-compiler-component))
+(define parse (make-compiler-component))
+(define generate-bytecode (make-compiler-component))
+(define modules (make-compiler-component))
 
 (define-compiler compile
   expand-syntax*

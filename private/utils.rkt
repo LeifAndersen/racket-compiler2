@@ -70,6 +70,7 @@
 (struct variable (name
                   operand
                   srcloc
+                  properties
                   assigned?
                   referenced?)
   #:mutable
@@ -82,10 +83,11 @@
    (define (hash2-proc v t) (eq-hash-code v))])
 (define (make-variable name
                        #:operand [operand #f]
+                       #:properties [properties (make-hash)]
                        #:source-location [srcloc #f]
                        #:assigned? [assigned #f]
                        #:referenced? [ref #f])
-  (variable name operand srcloc assigned ref))
+  (variable name operand srcloc properties assigned ref))
 (define debug-variable-printer
   (make-constructor-style-printer
    (lambda (obj) 'variable)

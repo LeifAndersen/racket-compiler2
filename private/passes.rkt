@@ -30,8 +30,7 @@
                      racket/stxparam
                      racket/stxparam-exptime)
          "languages.rkt"
-         "utils.rkt"
-         "components.rkt")
+         "utils.rkt")
 
 ;; Parse and alpha-rename expanded program
 (define-pass parse-and-rename : * (form) -> Lsrc ()

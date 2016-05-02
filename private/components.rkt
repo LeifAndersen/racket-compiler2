@@ -13,25 +13,25 @@
                     [current-compile base:current-compile])
          (for-syntax racket/base
                      syntax/parse
-                     racket/syntax))
+                     racket/syntax)
+         "utils.rkt")
 
-(provide define-compiler-component
+(provide make-compiler-component
          add-pass-to-component!
          define-compiler)
 
 ; Representation of a compiler component
-(struct compiler-component (passes)
-  #:mutable
-  #:transparent) ;; TODO: Remove, for debugging
-
-; Construct a compiler component
-(define-syntax (define-compiler-component stx)
-  (syntax-parse stx
-    [(_ name:id)
-     #'(define name (compiler-component '()))]))
+(struct compiler-component (passes
+                            pre-procs
+                            post-procs)
+  #:mutable)
+(define (make-compiler-component [passes '()]
+                                 #:pre-procs [pre-procs '()]
+                                 #:post-procs [post-procs '()])
+  (compiler-component passes pre-procs post-procs))
 
 ; Add a compiler pass to a component
-;  (to be used by define-language)
+;  (to be used by define-compiler)
 ;  (Adds back to front)
 (define (add-pass-to-component! component pass)
   (set-compiler-component-passes! component (cons pass (compiler-component-passes component))))
@@ -41,6 +41,37 @@
     (pattern name:id
              #:attr [components 1] '())
     (pattern (name:id components:id ...))))
+
+(struct key ())
+
+; Adds a property to a variable. Returns a key that must be used
+;   to get property out again.
+; Variable Any -> Key
+(define (variable-add-property! variable property)
+  (define k (key))
+  (dict-set! (variable-properties variable) k property)
+  k)
+
+; Updates the property attached to a specific variable and key.
+;   Returns the old property that was there.
+;   Errors if variable does not have a property for the key.
+; Variable Key (-> Any Any) -> Any
+(define (variable-update-property! variable key property-thunk)
+  (dict-update!
+   (dict-update! (variable-properties variable) key
+                 (lambda ()
+                   (raise (exn:fail:contract (format "Variable ~a does not contain key ~a"
+                                                     variable key)
+                                             (current-continuation-marks)))))))
+
+; Retrieves a property from a variable given a key.
+;   Errors if variable does not have a property for the key
+; Variable Key -> Any
+(define (variable-get-property variable key)
+  (dict-ref (variable-properties variable) key
+            (lambda ()
+              (raise (exn:fail:contract (format "Variable ~a does not contain key: ~a" variable key)
+                                        (current-continuation-marks))))))
 
 (define-syntax (define-compiler stx)
   (syntax-parse stx
