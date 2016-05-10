@@ -771,15 +771,17 @@
             `(,(map (lookup-env env) v) ...)]
            [(,v ,v* ... . ,v2)
             `(,((lookup-env env) v) ,(map (lookup-env env) v*) ... . ,((lookup-env env) v2))])
-  (Lambda : lambda (e [env '()]) -> expr ()
-          [(quote ,datum) `(quote ,datum)]
+
+  ; We can assume quote will never happen, as it's only there for the optimizer
+  (Lambda : lambda (e [env '()]) -> lambda ()
           [(#%plain-lambda ,formals
                            (assigned (,v ...) ,expr))
            (define env* (extend-env env v))
            `(#%plain-lambda ,(Formals formals env*)
                             ,(build-let v (map (lookup-env env*) v)
                                         (Expr expr env* #t)))])
-  [Expr : expr (e [env '()] [boxes? #t]) -> expr ()
+  (Expr : expr (e [env '()] [boxes? #t]) -> expr ()
+        [(quote ,datum) `(quote ,datum)]
         [(let ([,v ,[expr]] ...)
            (begin-set!
              ,set-expr ...
@@ -802,7 +804,7 @@
          (define expr* (Expr expr env #f))
          (if boxes?
              `(set!-boxes (,v ...) ,expr*)
-             `(set!-values (,(map (lookup-env env) v) ...) ,expr*))]])
+             `(set!-values (,(map (lookup-env env) v) ...) ,expr*))]))
 
 (define-pass uncover-free : Lconvertassignments (e) -> Luncoverfree ()
   (definitions

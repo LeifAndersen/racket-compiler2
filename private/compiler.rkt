@@ -57,7 +57,7 @@
   bytes->compiled-expression)
 
 (define code
- #'(let ()
+ #;#'(let ()
       (define (fold l init f)
         (if (null? l)
             init
@@ -88,6 +88,9 @@
         x))
  #;#'(let ([x 5])
       (set! x 6)
-      x))
+      x)
+  #'(letrec ([f (lambda (a) (f a))])
+        (f 1)))
 
 ;(compile/10 code)
+;(compile/11 code)

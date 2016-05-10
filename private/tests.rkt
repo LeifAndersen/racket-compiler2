@@ -591,6 +591,8 @@
   (block
     (define x (make-variable 'x))
     (define y (make-variable 'y))
+    (define f (make-variable 'f))
+    (define a (make-variable 'a))
     (define-compiler-test Lconvertassignments top-level-form
       (check-equal?
        (current-compile #'(let ([x 5])
@@ -633,10 +635,14 @@
             (set!-values (,x ,y) (#%plain-app (primitive values) '1 '2))
             (begin
               (set!-values (,x) (#%box ,x))
-              ,y)))))))
+              ,y))))
+      (check-equal?
+       (current-compile #'(letrec ([f (lambda (a) (f a))])
+                            (f 1)))
+       `(letrec ([,f (#%plain-lambda (,a) (#%plain-app ,f ,a))])
+          (#%plain-app ,f '1))))))
 
 ;; ===================================================================================================
-
 
 (module+ test
   (update-current-compile!)
