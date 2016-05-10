@@ -40,11 +40,12 @@
                       #:k [k (lambda (x) (error "No outer Continuation"))])
   (counter value context k))
 
-(define current-inline-size-limit (make-parameter 100))
-(define current-inline-effort-limit (make-parameter 100))
-(define current-passive-counter-default-value (make-parameter (+ 1000
+(define current-inline-size-limit (make-parameter 1000))
+(define current-inline-effort-limit (make-parameter 1000))
+(define current-passive-counter-default-value (make-parameter (+ 10000
                                                                  (current-inline-size-limit)
                                                                  (current-inline-effort-limit))))
+(current-outer-pending-default-fuel 10)
 
 ; Converts formals to use the new environment
 ; Environment Formals-Expr -> Formals-Expr
@@ -162,9 +163,7 @@
                     (define visited-vars
                       (for/list ([(i j) (in-dict var-map)]
                                  #:when (and (or (variable-referenced? i)
-                                                 (variable-assigned? i))
-                                             #;(not (variable? (operand-value j)))
-                                             #;(not (compiler-value? Lpurifyletrec (operand-value j)))))
+                                                 (variable-assigned? i))))
                         (if (variable-referenced? i)
                             (cons i (score-value-visit-operand! j size-counter))
                             (cons i `(primitive void)))))

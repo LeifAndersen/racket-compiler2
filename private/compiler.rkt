@@ -57,7 +57,7 @@
   bytes->compiled-expression)
 
 (define code
- #;#'(let ()
+ #'(let ()
       (define (fold l init f)
         (if (null? l)
             init
@@ -71,7 +71,7 @@
       (define (g a)
         (f (lambda (x) a)))
       (g '(1 2 3)))
-  #'(let ()
+  #;#'(let ()
     (define (f a)
       (f a))
     (f (lambda (x) '(1 2 3))))

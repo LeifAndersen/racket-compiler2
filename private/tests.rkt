@@ -572,7 +572,16 @@
                               (f (lambda (x) '(1 2 3)))))
         `(letrec ([,f (#%plain-lambda (,a) (assigned () (#%plain-app ,f ,a)))])
            (let ([,a (#%plain-lambda (,x) (assigned () ','(1 2 3)))])
-             (begin-set! (assigned () (#%plain-app ,f ,a)))))))))
+             (begin-set! (assigned () (#%plain-app ,f ,a))))))
+       (current-compile
+        #'(let ()
+            (define (fold l init f)
+              (if (null? l)
+                  init
+                  (fold (cdr l) (f init (car l)) f)))
+            (define (pow-sum l n)
+              (fold l 0 (lambda (x y) (+ (expt x n) (expt y n)))))
+            (pow-sum '(1 2 3) 2))))))
 
 ;; ===================================================================================================
 

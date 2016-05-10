@@ -16,6 +16,7 @@
          make-binding
          (struct-out operand)
          make-operand
+         current-outer-pending-default-fuel
          foldable?
          effect-free?
          return-true?
@@ -115,6 +116,8 @@
 (define (make-binding #:properties [properties (make-hash)])
   (binding properties))
 
+(define current-outer-pending-default-fuel (make-parameter 1))
+
 (struct operand (exp
                  env
                  effort-counter
@@ -129,7 +132,7 @@
                       #:residualized-for-effect? [residualized-for-effect? #f]
                       #:size [size 0]
                       #:inner-pending? [inner-pending? #f]
-                      #:outer-pending [outer-pending 10])
+                      #:outer-pending [outer-pending (current-outer-pending-default-fuel)])
   (operand exp env effort-counter value residualized-for-effect? size inner-pending? outer-pending))
 
 ; Determine if this primitive is one that is effect free
@@ -157,7 +160,7 @@
 ; Symbol -> Boolean
 (define (foldable? primitive)
   (define foldable-set
-    (set '+ '- '* '/ '= '< '> '<= '>=))
+    (set '+ '- '* '/ '= '< '> '<= '>= 'exp 'expt 'sqrt))
   (cond
     [(set-member? foldable-set primitive) #t]
     [else #f]))
