@@ -22,7 +22,7 @@
 
 ;(current-variable-printer debug-variable-printer)
 
-;; App conetxt, for storing valid functions
+;; App context, for storing valid functions
 ;; Valid contexts are 'test 'value 'effect, and other
 ;;   app contexts
 (struct app (operands
@@ -35,12 +35,16 @@
                  context
                  k)
   #:mutable)
-(define (make-counter value #:context [context #f] #:k [k #f])
+(define (make-counter value
+                      #:context [context #f]
+                      #:k [k (lambda (x) (error "No outer Continuation"))])
   (counter value context k))
 
-(define current-inline-size-limit (make-parameter 50))
+(define current-inline-size-limit (make-parameter 100))
 (define current-inline-effort-limit (make-parameter 100))
-(define current-inline-app-limit (make-parameter 100))
+(define current-passive-counter-default-value (make-parameter (+ 1000
+                                                                 (current-inline-size-limit)
+                                                                 (current-inline-effort-limit))))
 
 ; Converts formals to use the new environment
 ; Environment Formals-Expr -> Formals-Expr
@@ -58,13 +62,18 @@
 ;;   to themselves
 (define empty-env (hash))
 (define ((env-lookup env) x)
-  (dict-ref env x x))
+  (define x* (dict-ref env x x))
+  ;(printf "env-lookup:~n env: ~a~n x: ~a~n x*: ~a~n (equal? x x*): ~a~n~n" env x x* (equal? x x*))
+  x*)
+
 (define (extend-env env x opnd)
   (define x*
     (make-variable (variable-name x)
                    #:operand opnd
-                   #:assigned? (variable-assigned? x)
-                   #:referenced? (variable-referenced? x)))
+                   ; TODO Should this be copied?
+                   ;#:assigned? (variable-assigned? x)
+                   ;#:referenced? (variable-referenced? x)
+                   ))
   (dict-set env x x*))
 (define (extend-env* env x* opnd*)
   (for/fold ([env env])
@@ -77,15 +86,15 @@
   (and (counter? counter) (counter-context counter)))
 
 ;; Passive counters are counters with #f as a context, and error as a continuation
-(define passive-counter-default-value 1000)
+(define fixed-passive-counter-default-value (current-passive-counter-default-value))
 (define (make-passive-counter)
-  (make-counter passive-counter-default-value
+  (make-counter fixed-passive-counter-default-value
                 #:context #f
                 #:k (lambda x
                       (error 'inline-expressions
                              "Tried to call continuation on a passive counter"))))
 (define (passive-counter-value counter)
-  (- passive-counter-default-value (counter-value counter)))
+  (- fixed-passive-counter-default-value (counter-value counter)))
 
 ;; Determins if the amount of operands passed into a function
 ;;    matches the amount accepted by the formals
@@ -152,11 +161,14 @@
                         (set-operand-residualized-for-effect?! var #t)))
                     (define visited-vars
                       (for/list ([(i j) (in-dict var-map)]
-                                 #:when (and (variable-referenced? i)
-                                             (variable-assigned? i)))
+                                 #:when (and (or (variable-referenced? i)
+                                                 (variable-assigned? i))
+                                             #;(not (variable? (operand-value j)))
+                                             #;(not (compiler-value? Lpurifyletrec (operand-value j)))))
                         (if (variable-referenced? i)
                             (cons i (score-value-visit-operand! j size-counter))
                             (cons i `(primitive void)))))
+                    ;(printf "make-let2:~n visited-vars: ~a~n~n" visited-vars)
                     (if (dict-empty? visited-vars)
                         body
                         `(let ([,(dict-keys visited-vars) ,(dict-values visited-vars)] ...)
@@ -197,7 +209,9 @@
       [_
        (define v* ((env-lookup env) v))
        (define opnd (variable-operand v*))
-       ;(printf "inline-ref:~n v*: ~a~n opnd: ~a~n opnd-exp: ~a~n~n" v* opnd (and opnd (operand-exp opnd)))
+       ;(printf "inline-ref:~n v*: ~a~n ctxt: ~a~n opnd: ~a~n opnd-exp: ~a~n opnd-inner-pend: ~a~n~n"
+       ;        v* context opnd (and opnd (operand-exp opnd))
+       ;        (and opnd (operand-inner-pending? opnd)))
        (cond
          [(and opnd (not (operand-inner-pending? opnd)))
           (dynamic-wind
@@ -208,7 +222,7 @@
             [(variable-assigned? v) (residualize-ref v* size-counter)]
             [else
              (define rhs (result-expr (operand-value opnd)))
-             ;(printf "inline-ref2:~n v*: ~a~n rhs: ~a~n~n" v* rhs)
+             ;(printf "inline-ref2:~n v*: ~a~n ctx: ~a~n rhs: ~a~n~n" v* context rhs)
              (nanopass-case (Lpurifyletrec expr) rhs
                             [(quote ,datum) rhs]
                             [,v**
@@ -227,9 +241,10 @@
 (define (copy v opnd context effort-counter size-counter)
   (with-output-language (Lsrc expr)
     (define rhs (result-expr (operand-value opnd)))
-    ;(printf "copy:~n v: ~a~n opnd: ~a~n ctx: ~a~n rhs: ~a~n opnd-outer-pending: ~a~n~n" v opnd context rhs (operand-outer-pending opnd))
+    ;(printf "copy:~n v: ~a~n opnd: ~a~n ctx: ~a~n rhs: ~a~n opnd-outer-pending: ~a~n~n"
+    ;        v opnd context rhs (operand-outer-pending opnd))
     (nanopass-case (Lpurifyletrec expr) rhs
-                   [(#%plain-lambda ,formals ,abody)
+                  [(#%plain-lambda ,formals ,abody)
                     (match context
                       ['value (residualize-ref v size-counter)]
                       ['test `'#t]
@@ -251,7 +266,7 @@
                                                                #:k abort))
                                              (make-counter limit #:context context #:k abort))))
                                  (lambda () (set-operand-outer-pending!
-                                             opnd(+ (operand-outer-pending opnd) 1)))))
+                                             opnd (+ (operand-outer-pending opnd) 1)))))
                            (residualize-ref v size-counter))])]
                    [(primitive ,id)
                     (match context
@@ -359,20 +374,21 @@
                                  (operand-effort-counter (first rest-opnds)))))]
                       [else opnds]))
                   (define env* (extend-env* env formals* opnds*))
-                  ;(printf "inline2:~n expr: ~a~n fml*: ~a~n opnds*: ~a~n env*: ~a~n~n" expr formals* opnds* env*)
+                  ;(printf "inline2:~n expr: ~a~n fml*: ~a~n opnds*: ~a~n env*: ~a~n~n"
+                  ;        expr formals* opnds* env*)
                   (define body (inline-expressions expr
                                                    (app-context context)
                                                    env*
                                                    effort-counter
                                                    size-counter))
-                  ;(printf "inline3:~n body: ~a~n~n" body)
+                  ;(printf "inline3:~n proc: ~a~n ctxt: ~a~n body: ~a~n~n" proc context body)
                   (define result
                     (make-let (map (env-lookup env*) formals*)
                               opnds*
                               (map (env-lookup env*) v)
                               body
                               size-counter))
-                  ;(printf "inline4:~n result: ~a~n~n" result)
+                  ;(printf "inline4:~n proc: ~a~n ctxt: ~a~n result: ~a~n~n" proc context result)
                   (set-app-inlined?! context #t)
                   result]))
 
@@ -380,7 +396,8 @@
 ;; ID Context Counter -> Expr
 (define (fold-prim prim context size-counter)
   (define operands (app-operands context))
-  ;(printf "fold-prim:~n prim: ~a~n ctx: ~a~n operands: ~a~n operand-vals: ~a~n~n" prim context operands (map operand-value operands))
+  ;(printf "fold-prim:~n prim: ~a~n ctx: ~a~n operands: ~a~n operand-vals: ~a~n~n"
+  ;        prim context operands (map operand-value operands))
   (with-output-language (Lpurifyletrec expr)
     (define result
       (or (and (effect-free? prim)
@@ -390,7 +407,7 @@
                  [else #f]))
           (and (foldable? prim)
                (let ([vals (map value-visit-operand! operands)])
-                 ;(printf "fold-prim2:~n vals: ~a~n~n" vals)
+                 ;(printf "fold-prim2:~n prim: ~a~n vals: ~a~n~n" prim vals)
                  (define-values (consts? operands*)
                    (for/fold ([const-vals #t]
                               [ops null])
@@ -405,7 +422,6 @@
                                       [(quote ,datum) datum]
                                       [else #f])
                        ops))))
-                 ;(printf "consts?: ~a~n" consts?)
                  (define operands** (reverse operands*))
                  (and consts?
                       (with-handlers ([exn? (lambda (x) (displayln "inline failed") #f)])
@@ -436,6 +452,7 @@
   (define n (- (counter-value counter) amount))
   (set-counter-value! counter n)
   (when (< n 0)
+    ;(displayln "DING!")
     (when (app? (counter-context counter))
       (reset-integrated! (counter-context counter)))
     ((counter-k counter) #f)))
@@ -476,7 +493,7 @@
         [(set!-values (,v ...) ,expr)
          (define v* (map (env-lookup env) v))
          (cond
-           [(ormap variable-referenced? v*)
+           [(ormap variable-referenced? v)
             (define expr* (inline-expressions expr 'value env effort-counter size-counter))
             (map (curryr set-variable-assigned?! #t) v*)
             `(set!-values (,v* ...) ,expr*)]
@@ -528,12 +545,16 @@
          (for ([i (in-list v*)]
                [j (in-list operands)])
            (set-variable-operand! i j))
+         ;(printf "inline-expressions-letrec:~n env*: ~a~n v*: ~a~n operands: ~a~n~n"
+         ;        env* v* operands)
          (define expr* (inline-expressions expr context env* effort-counter size-counter))
          (define filtered-vars
            (for/list ([i (in-list v*)]
                       [j (in-list operands)]
                       #:when (variable-referenced? i))
              (cons i j)))
+         ;(printf "inline-expressions-letrec-2:~n expr: ~a~n expr*: ~a~n filtered-vars: ~a~n~n"
+         ;        expr expr* filtered-vars)
          (cond [(or (null? filtered-vars)
                     (nanopass-case (Lpurifyletrec expr) expr*
                                    [(quote ,datum) #t]
@@ -579,6 +600,11 @@
 (define (~inline-expressions e
                              [context 'value]
                              [env (hash)]
-                             [effort-counter (make-counter (current-inline-effort-limit))]
-                             [size-counter (make-counter (current-inline-size-limit))])
-  (inline-expressions e context env effort-counter size-counter))
+                             [effort-counter (make-counter (current-inline-effort-limit)
+                                                           #:k (lambda (x)
+                                                                 (raise e)))]
+                             [size-counter (make-counter (current-inline-size-limit)
+                                                         #:k (lambda (x)
+                                                               (raise e)))])
+  (with-handlers ([Lpurifyletrec? (lambda (x) x)])
+    (inline-expressions e context env effort-counter size-counter)))

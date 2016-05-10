@@ -12,13 +12,16 @@
          debug-variable-printer
          current-variable-printer
          current-variable-equal?
+         (struct-out binding)
+         make-binding
          (struct-out operand)
          make-operand
          foldable?
          effect-free?
          return-true?
          formals->identifiers
-         formals-rest?)
+         formals-rest?
+         compiler-value?)
 
 (require nanopass/base
          racket/set
@@ -65,11 +68,12 @@
   (not (syntax? d)))
 
 ; Represents a variable expression.
-; One variable is bound to another if they point to the same location in memory
+; One variable is bound to another if their bindings point point to the same location in memory
 ; Variables are not assigned or referenced by default, a pass changes that if it occurs
 (struct variable (name
                   operand
                   srcloc
+                  binding
                   properties
                   assigned?
                   referenced?)
@@ -85,23 +89,31 @@
                        #:operand [operand #f]
                        #:properties [properties (make-hash)]
                        #:source-location [srcloc #f]
+                       #:binding [binding (make-binding)]
                        #:assigned? [assigned #f]
                        #:referenced? [ref #f])
-  (variable name operand srcloc properties assigned ref))
+  (variable name operand srcloc binding properties assigned ref))
 (define debug-variable-printer
   (make-constructor-style-printer
    (lambda (obj) 'variable)
    (lambda (obj) (list (variable-name obj)
                        (variable-operand obj)
+                       (variable-properties obj)
                        (variable-assigned? obj)
                        (variable-referenced? obj)))))
-  
-(define current-variable-equal? (make-parameter (lambda (a b) (eq? a b))))
+
+(define current-variable-equal?
+  (make-parameter (lambda (a b) (eq? (variable-binding a) (variable-binding b)))))
 (define current-variable-printer
   (make-parameter
    (make-constructor-style-printer
     (lambda (obj) 'variable)
     (lambda (obj) (list (variable-name obj))))))
+
+; Binding object, ensures that two variables are equal.
+(struct binding (properties))
+(define (make-binding #:properties [properties (make-hash)])
+  (binding properties))
 
 (struct operand (exp
                  env
@@ -136,7 +148,7 @@
 ; Symbol -> Boolean
 (define (return-true? primitive)
   (define return-true-set
-    (set 'cons 'list))
+    (set 'cons 'list 'random))
   (cond [(set-member? return-true-set primitive) #t]
         [else #f]))
 
@@ -165,3 +177,7 @@
                  [(,v (... ...))           #f]
                  [(,v ,v* (... ...) . ,v2) #t]))
 
+(define-syntax-rule (compiler-value? lang exp)
+  (nanopass-case (lang top-level-form) exp
+                 [(quote ,datum) #t]
+                 [else #f]))

@@ -32,12 +32,11 @@
          "languages.rkt"
          "utils.rkt")
 
+(define current-global-env/parse-and-rename (make-parameter (make-hash)))
+
 ;; Parse and alpha-rename expanded program
 (define-pass parse-and-rename : * (form) -> Lsrc ()
   (definitions
-
-    (define current-global-env (make-parameter (make-hash)))
-
     ; Initial environment for local variables
     (define initial-env (hash))
     (define (extend-env env vars)
@@ -50,11 +49,11 @@
       (define var* (syntax->datum var))
       (dict-ref env var*
                 (lambda ()
-                  (dict-ref (current-global-env) var*
+                  (dict-ref (current-global-env/parse-and-rename) var*
                             (lambda ()
                               (let ([x (make-variable var*
                                                       #:source-location (syntax-source var))])
-                                (dict-set! (current-global-env) var* x)
+                                (dict-set! (current-global-env/parse-and-rename) var* x)
                                 x)))))))
 
   (parse-top : * (form env) -> top-level-form ()
@@ -64,7 +63,7 @@
                 `(#%expression ,(parse-expr #'body env))]
                [(module id:id path
                   (#%plain-module-begin body ...))
-                (parameterize ([current-global-env (make-hash)])
+                (parameterize ([current-global-env/parse-and-rename (make-hash)])
                   `(module ,(syntax->datum #'id) ,(syntax->datum #'path)
                      (,(for/list ([i (in-list (syntax->list #'(body ...)))])
                          (parse-mod i env)) ...)))]
@@ -91,19 +90,19 @@
                 `(#%declare ,(syntax->list #'(keyword ...)) ...)]
                [(module id:id path
                   (#%plain-module-begin body ...))
-                (parameterize ([current-global-env (make-hash)])
+                (parameterize ([current-global-env/parse-and-rename (make-hash)])
                   `(submodule ,(syntax->datum #'id) ,(syntax->datum #'path)
                               (,(for/list ([i (in-list (syntax->list #'(body ...)))])
                                   (parse-mod i env)) ...)))]
                [(module* id:id path
                   (#%plain-module-begin body ...))
-                (parameterize ([current-global-env (make-hash)])
+                (parameterize ([current-global-env/parse-and-rename (make-hash)])
                   `(submodule* ,(syntax->datum #'id) ,(syntax->datum #'path)
                                (,(for/list ([i (in-list (syntax->list #'(body ...)))])
                                    (parse-mod i env)) ...)))]
                [(module* id:id path
                   (#%plain-module-begin body ...))
-                (parameterize ([current-global-env (make-hash)])
+                (parameterize ([current-global-env/parse-and-rename (make-hash)])
                   `(submodule* ,(syntax->datum #'id)
                                (,(for/list ([i (in-list (syntax->list #'(body ...)))])
                                    (parse-mod i env)) ...)))]

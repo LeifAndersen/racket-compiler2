@@ -467,6 +467,7 @@
      (define a (make-variable 'a))
      (define b (make-variable 'b))
      (define c (make-variable 'c))
+     (define f (make-variable 'f))
      (define x (make-variable 'x))
      (define y (make-variable 'y))
      (define z (make-variable 'z))
@@ -540,8 +541,38 @@
                                                  (if (x . <= . 0)
                                                      1
                                                      (* x (fact (- x 1)))))])
-                                  (fact 5)))
-        `'120))))
+                             (fact 5)))
+        `'120)
+       (check-equal?
+        (current-compile #'(let ([x 5])
+                             (set! x 6)
+                             x))
+        `(let ([,x '5])
+           (begin-set!
+             (assigned (,x)
+                       (begin
+                         (set!-values (,x) '6)
+                         ,x)))))
+       (check-equal?
+        (current-compile #'(let ([x 5])
+                             (lambda (y) x)))
+        `(#%plain-lambda (,y) (assigned () '5)))
+       (check-equal?
+        (current-compile #'(let ([x (read)])
+                             (let ([x x])
+                               (+ x x))))
+        `(let ([,x (#%plain-app (primitive read))])
+           (begin-set!
+             (assigned ()
+                       (#%plain-app (primitive +) ,x ,x)))))
+       (check-equal?
+        (current-compile  #'(let ()
+                              (define (f a)
+                                (f a))
+                              (f (lambda (x) '(1 2 3)))))
+        `(letrec ([,f (#%plain-lambda (,a) (assigned () (#%plain-app ,f ,a)))])
+           (let ([,a (#%plain-lambda (,x) (assigned () ','(1 2 3)))])
+             (begin-set! (assigned () (#%plain-app ,f ,a)))))))))
 
 ;; ===================================================================================================
 
@@ -648,7 +679,7 @@
                             (set! x 6)))
        `(program (,x) (begin*
                         (define-values (,x) '5)
-                        (#%plain-app (primitive void)))))
+                        (set!-values (,x) '6))))
       (check-equal?
        (current-compile #'(letrec ([f (lambda (x) x)])
                             (f 12)))

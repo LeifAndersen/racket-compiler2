@@ -18,17 +18,25 @@
 
 (provide make-compiler-component
          add-pass-to-component!
-         define-compiler)
+         define-compiler
+         (struct-out compiler-component)
+         add-pass-to-component!
+         variable-add-property!
+         variable-update-property!
+         variable-get-property)
 
 ; Representation of a compiler component
+; passes : (Listof Procedure)
+; insertion-procs : (HashTable Symbol (Setof (-> Any Any))
 (struct compiler-component (passes
-                            pre-procs
-                            post-procs)
+                            insertion-procs)
   #:mutable)
 (define (make-compiler-component [passes '()]
-                                 #:pre-procs [pre-procs '()]
-                                 #:post-procs [post-procs '()])
-  (compiler-component passes pre-procs post-procs))
+                                 [insertion-procs (make-hash
+                                                   (list
+                                                    (list 'pre (mutable-set))
+                                                    (list 'post (mutable-set))))])
+  (compiler-component passes insertion-procs))
 
 ; Add a compiler pass to a component
 ;  (to be used by define-compiler)
@@ -42,6 +50,7 @@
              #:attr [components 1] '())
     (pattern (name:id components:id ...))))
 
+; Key object to be used in variable properties table
 (struct key ())
 
 ; Adds a property to a variable. Returns a key that must be used
@@ -72,6 +81,23 @@
             (lambda ()
               (raise (exn:fail:contract (format "Variable ~a does not contain key: ~a" variable key)
                                         (current-continuation-marks))))))
+
+; Adds a procedure to a component
+;   The location field is currently either 'pre or 'post
+;   As we learn more about what valid locations should be, that will change.
+;   Possibly even make it possible for a component to state what valid locations are.
+; Component Symbol (-> Any Any) -> Void
+(define (component-add-proc! component location proc)
+  (define insertion-procs (compiler-component-insertion-procs component))
+  (unless (hash-has-key? location)
+    (raise (exn:fail:contract (format "Compiler Component ~a does not contain location: ~a"
+                                      component location)
+                              (current-continuation-marks)))))
+
+; Returns a setof of all valid locations in the compiler component
+; Component -> (Setof Symbol)
+(define (compiler-component-insert-locations component)
+  (dict-keys (compiler-component-insertion-procs component)))
 
 (define-syntax (define-compiler stx)
   (syntax-parse stx
