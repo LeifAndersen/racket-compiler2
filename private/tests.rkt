@@ -108,6 +108,8 @@
    (define a (make-variable 'a))
    (define b (make-variable 'b))
    (define c (make-variable 'c))
+   (define match (make-variable 'match))
+   (define match2 (make-variable 'match2))
    (define-compiler-test Lsrc top-level-form
       (check-equal?
        (current-compile #'(lambda (x) x))
@@ -158,6 +160,34 @@
        `(module foo racket/base
           ((#%require racket/match)
            (#%provide (all-from-except racket/match ,(make-variable 'match))))))
+      (check-equal?
+       (current-compile #'(module bar racket/base
+                            (#%plain-module-begin
+                             (#%require (for-template racket/base)
+                                        (for-label racket/base)
+                                        (just-meta 0 racket))
+                             42)))
+       `(module bar racket/base
+          ((#%require (for-meta -1 racket/base)
+                      (for-meta #f racket/base)
+                      (just-meta 0 racket))
+           '42)))
+      (check-equal?
+       (current-compile #'(module bar racket/base
+                            (#%plain-module-begin
+                             (#%require (only racket/match match)
+                                        (all-except racket/match match)
+                                        (rename racket/match match2 match)
+                                        (prefix-all-except match: racket/match match)
+                                        ; TODO (planet "match" ("match" "match")) ; Not a real package
+                                        ))))
+       `(module bar racket/base
+          ((#%require (only racket/match ,match)
+                      (all-except racket/match ,match)
+                      (rename racket/match ,match2 ,match)
+                      (prefix-all-except match: racket/match ,match)
+                      ; TODO (planet "match" ("match" "match"))
+                      ))))
       (check-equal?
        (current-compile #'(module bar racket
                             (#%plain-module-begin
@@ -214,6 +244,17 @@
           ()
           ((module test #f
              (,x) () ()))))
+      (check-equal?
+       (current-compile #'(module outer racket
+                            (#%plain-module-begin
+                             (module* inner #f
+                               (#%plain-module-begin
+                                5)))))
+       `(module outer racket
+          ((#%plain-app (primitive void)))
+          ()
+          ((module inner #f
+             ('5) () ()))))
       (check-equal?
        (current-compile #'(module foo racket/base
                             (#%plain-module-begin

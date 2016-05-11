@@ -100,12 +100,6 @@
                   `(submodule* ,(syntax->datum #'id) ,(syntax->datum #'path)
                                (,(for/list ([i (in-list (syntax->list #'(body ...)))])
                                    (parse-mod i env)) ...)))]
-               [(module* id:id path
-                  (#%plain-module-begin body ...))
-                (parameterize ([current-global-env/parse-and-rename (make-hash)])
-                  `(submodule* ,(syntax->datum #'id)
-                               (,(for/list ([i (in-list (syntax->list #'(body ...)))])
-                                   (parse-mod i env)) ...)))]
                [else
                 (parse-gen #'else env)]))
 
@@ -250,12 +244,12 @@
                                   (parse-phaseless-req-spec i env)) ...)]
                             [(for-template phaseless-req-spec ...)
                              `(for-meta
-                               ,#f
+                               ,-1
                                ,(for/list ([i (in-list (syntax->list #'(phaseless-req-spec ...)))])
                                   (parse-phaseless-req-spec i env)) ...)]
                             [(for-label phaseless-req-spec ...)
                              `(for-meta
-                               ,-1
+                               ,#f
                                ,(for/list ([i (in-list (syntax->list #'(phaseless-req-spec ...)))])
                                   (parse-phaseless-req-spec i env)) ...)]
                             [(just-meta phase-level raw-req-spec ...)
@@ -275,7 +269,7 @@
                                `(prefix-all-except ,(syntax-e #'id)
                                                    ,(parse-raw-module-path #'raw-module-path env))]
                               [(all-except raw-module-path ids:id ...)
-                               `(all-except ,(parse-raw-module-path #'raw-module-path)
+                               `(all-except ,(parse-raw-module-path #'raw-module-path env)
                                             ,(map (curryr parse-expr env)
                                                   (syntax->list #'(ids ...))) ...)]
                               [(prefix-all-except id:id raw-module-path ids:id ...)
@@ -284,7 +278,7 @@
                                  ,(parse-raw-module-path #'raw-module-path env)
                                  ,(map (curryr parse-expr env) (syntax->list #'(ids ...))) ...)]
                               [(rename raw-module-path id1:id id2:id)
-                               `(rename ,(parse-raw-module-path #'raw-module-path)
+                               `(rename ,(parse-raw-module-path #'raw-module-path env)
                                         ,(parse-expr #'id1 env)
                                         ,(parse-expr #'id2 env))]
                               [else (parse-raw-module-path #'else env)]))
@@ -391,15 +385,6 @@
                           null
                           (list (with-output-language (Lsubmodules submodule-form)
                                   `(module ,id ,module-path
-                                     (,module-level-form ...)
-                                     (,(append* pre) ...)
-                                     (,(append* post) ...)))))]
-                 [(submodule* ,id
-                              (,[module-level-form pre post] ...))
-                  (values `(#%plain-app (primitive void))
-                          null
-                          (list (with-output-language (Lsubmodules submodule-form)
-                                  `(module ,id #f
                                      (,module-level-form ...)
                                      (,(append* pre) ...)
                                      (,(append* post) ...)))))])

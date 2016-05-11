@@ -35,8 +35,6 @@
                   (submodule id module-path
                              (module-level-form ...))
                   (submodule* id module-path
-                              (module-level-form ...))
-                  (submodule* id
                               (module-level-form ...)))
   (general-top-level-form (general-top-level-form)
                           expr
@@ -115,8 +113,6 @@
                   (- (submodule id module-path
                                 (module-level-form ...))
                      (submodule* id module-path
-                                 (module-level-form ...))
-                     (submodule* id
                                  (module-level-form ...)))
                   (+ (module id module-path
                        (module-level-form ...)
