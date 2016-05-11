@@ -573,6 +573,25 @@
         `(letrec ([,f (#%plain-lambda (,a) (assigned () (#%plain-app ,f ,a)))])
            (let ([,a (#%plain-lambda (,x) (assigned () ','(1 2 3)))])
              (begin-set! (assigned () (#%plain-app ,f ,a))))))
+       (check-equal?
+        (current-compile #'(if (lambda (x) x) 5 6))
+        `'5)
+       (check-equal?
+        (current-compile #'(let ([x 5])
+                             (set! x (begin (lambda (x) 5)
+                                            6))
+                             x))
+        `(let ([,x '5])
+           (begin-set!
+             (assigned (,x)
+                       (begin
+                         (set!-values (,x) '6)
+                         ,x)))))
+       (check-equal?
+        (current-compile #'((lambda (x) 5) 6 7))
+        `(#%plain-app
+          (#%plain-lambda (,x) (assigned () '5))
+          '6 '7))
        (current-compile
         #'(let ()
             (define (fold l init f)

@@ -104,8 +104,8 @@
   (define formals* (formals->identifiers Lpurifyletrec formals))
   (define rest? (formals-rest? Lpurifyletrec formals))
   (if rest?
-      ((length formals) . <= . (length operands))
-      (= (length formals) (length operands))))
+      ((length formals*) . <= . (- (length operands) 1))
+      (= (length formals*) (length operands))))
 
 ;; Determins if a syntactic form is simple and can thus be
 ;;    ignored in a begin statement
@@ -347,49 +347,55 @@
 ;; Performs the actual inlining
 ;; Lambda-Expr App-Context Env -> Exp
 (define (inline proc context env effort-counter size-counter)
-  ;(printf "inline:~n proc: ~a~n ctx: ~a~n env: ~a~n~n" proc context env)
-  (nanopass-case (Lpurifyletrec lambda) proc
-                 [(#%plain-lambda ,formals
-                                  (assigned (,v ...) ,expr))
-                  (define formals* (formals->identifiers Lpurifyletrec formals))
-                  (define rest? (formals-rest? Lpurifyletrec formals))
-                  (define opnds (app-operands context))
-                  (define opnds*
-                    (cond
-                      [rest?
-                       (define-values (single-opnds rest-opnds)
-                         (split-at opnds (- (length formals*) 1)))
-                       (append single-opnds
-                               ;; TODO, does this operand need to be
-                               ;;   residulized for effect?
-                               ;;   or recalculate effort counter?
-                               (list
-                                (make-operand
-                                 (with-output-language (Lpurifyletrec expr)
+  (with-output-language (Lpurifyletrec expr)
+    ;(printf "inline:~n proc: ~a~n ctx: ~a~n env: ~a~n~n" proc context env)
+    (nanopass-case (Lpurifyletrec lambda) proc
+                   [(#%plain-lambda ,formals
+                                    (assigned (,v ...) ,expr))
+                    (define formals* (formals->identifiers Lpurifyletrec formals))
+                    (define rest? (formals-rest? Lpurifyletrec formals))
+                    (define opnds (app-operands context))
+                    (define opnds*
+                      (cond
+                        [rest?
+                         (define-values (single-opnds rest-opnds)
+                           (split-at opnds (- (length formals*) 1)))
+                         (append single-opnds
+                                 ;; TODO, does this operand need to be
+                                 ;;   residulized for effect?
+                                 ;;   or recalculate effort counter?
+                                 (list
+                                  (make-operand
                                    `(#%plain-app (primitive list)
-                                                 ,(map operand-exp rest-opnds) ...))
-                                 (apply hash-union (hash)
-                                        (map operand-env rest-opnds))
-                                 (operand-effort-counter (first rest-opnds)))))]
-                      [else opnds]))
-                  (define env* (extend-env* env formals* opnds*))
-                  ;(printf "inline2:~n expr: ~a~n fml*: ~a~n opnds*: ~a~n env*: ~a~n~n"
-                  ;        expr formals* opnds* env*)
-                  (define body (inline-expressions expr
-                                                   (app-context context)
-                                                   env*
-                                                   effort-counter
-                                                   size-counter))
-                  ;(printf "inline3:~n proc: ~a~n ctxt: ~a~n body: ~a~n~n" proc context body)
-                  (define result
-                    (make-let (map (env-lookup env*) formals*)
-                              opnds*
-                              (map (env-lookup env*) v)
-                              body
-                              size-counter))
-                  ;(printf "inline4:~n proc: ~a~n ctxt: ~a~n result: ~a~n~n" proc context result)
-                  (set-app-inlined?! context #t)
-                  result]))
+                                                 ,(map operand-exp rest-opnds) ...)
+                                   (apply hash-union (hash)
+                                          (map operand-env rest-opnds))
+                                   (operand-effort-counter (first rest-opnds)))))]
+                        [else opnds]))
+                    (define env* (extend-env* env formals* opnds*))
+                    ;(printf "inline2:~n expr: ~a~n fml*: ~a~n opnds*: ~a~n env*: ~a~n~n"
+                    ;        expr formals* opnds* env*)
+                    (define body (inline-expressions expr
+                                                     (app-context context)
+                                                     env*
+                                                     effort-counter
+                                                     size-counter))
+                    ;(printf "inline3:~n proc: ~a~n ctxt: ~a~n body: ~a~n~n" proc context body)
+                    (define result
+                      (if (operands-match? formals opnds)
+                          (make-let (map (env-lookup env*) formals*)
+                                    opnds*
+                                    (map (env-lookup env*) v)
+                                    body
+                                    size-counter)
+                          `(#%plain-app (#%plain-lambda (,formals* ...)
+                                                        (assigned (,v ...)
+                                                                  ,body))
+                                        ,(map (curryr score-value-visit-operand! size-counter)
+                                              opnds*) ...)))
+                    ;(printf "inline4:~n proc: ~a~n ctxt: ~a~n result: ~a~n~n" proc context result)
+                    (set-app-inlined?! context #t)
+                    result])))
 
 ;; Does constant fold on primitives (if possible)
 ;; ID Context Counter -> Expr
