@@ -160,7 +160,8 @@
 ; Symbol -> Boolean
 (define (foldable? primitive)
   (define foldable-set
-    (set '+ '- '* '/ '= '< '> '<= '>= 'exp 'expt 'sqrt))
+    (set '+ '- '* '/ '= '< '> '<= '>= 'exp 'expt 'sqrt 'symbol->string 'string->symbol
+         'string-append 'append))
   (cond
     [(set-member? foldable-set primitive) #t]
     [else #f]))

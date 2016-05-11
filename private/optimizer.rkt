@@ -429,9 +429,10 @@
                        ops))))
                  (define operands** (reverse operands*))
                  (and consts?
-                      (with-handlers ([exn? (lambda (x) (displayln "inline failed") #f)])
+                      (with-handlers ([exn? (lambda (x) #f)])
                         `(quote ,(parameterize ([current-namespace (make-base-namespace)])
-                                   (eval (cons prim operands**))))))))))
+                                   (eval (cons prim (for/list ([o (in-list operands**)])
+                                                      (list 'quote o))))))))))))
     ;(printf "fold-prim3: ~n result: ~a~n~n" result)
     (cond
       [result (for-each (curryr set-operand-residualized-for-effect?! #t) operands)

@@ -589,6 +589,9 @@
                              (fact 5)))
         `'120)
        (check-equal?
+        (current-compile #'(string-append "hello " (symbol->string 'world)))
+        `'"hello world")
+       (check-equal?
         (current-compile #'(let ([x 5])
                              (set! x 6)
                              x))
