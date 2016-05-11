@@ -724,7 +724,8 @@
                      (letrec ([,f (#%plain-lambda (,'() ...) (free (,x) () (#%unbox ,x)))])
                        (begin
                          (set!-boxes (,x) '7)
-                         (#%plain-app ,f ,f)))))))
+                         (#%plain-app (#%plain-lambda (,'() ...) (free (,x) () (#%unbox ,x)))
+                                      ,f)))))))
       (check-equal?
        (current-compile #'(begin
                             (define x 5)
