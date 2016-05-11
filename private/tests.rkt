@@ -141,6 +141,10 @@
        `(module test racket
           ((begin-for-syntax
              (define-values (,x) '5)))))
+     ;; XXX The ,'() ... should NOT be needed
+      (check-equal?
+       (current-compile #'(lambda () 5))
+       `(#%expression (#%plain-lambda (,'() ...) '5)))
       (check-equal?
        (current-compile #'(lambda (a b . c)
                             (apply + a b c)))
@@ -707,6 +711,20 @@
                         (begin
                           (set!-boxes (,x) '6)
                           (#%unbox ,x))))))
+      (check-equal?
+       (current-compile #'(let ([x 6])
+                            (letrec ([f (lambda () x)])
+                              (set! x 7)
+                              (f f))))
+       `(program ()
+                 (let ([,x '6])
+                   (begin
+                     (set!-values (,x) (#%box ,x))
+                     ;; The ,'() ... should NOT be needed
+                     (letrec ([,f (#%plain-lambda (,'() ...) (free (,x) () (#%unbox ,x)))])
+                       (begin
+                         (set!-boxes (,x) '7)
+                         (#%plain-app ,f ,f)))))))
       (check-equal?
        (current-compile #'(begin
                             (define x 5)
