@@ -592,6 +592,9 @@
         (current-compile #'(string-append "hello " (symbol->string 'world)))
         `'"hello world")
        (check-equal?
+        (current-compile #'(/ 5 0))
+        `(#%plain-app (primitive /) '5 '0))
+       (check-equal?
         (current-compile #'(let ([x 5])
                              (set! x 6)
                              x))
