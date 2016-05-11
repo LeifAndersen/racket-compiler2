@@ -841,11 +841,33 @@
     (block
      (define x (make-variable 'x))
      (define f (make-variable 'f))
+     (define g (make-variable 'g))
      (define-compiler-test Lclosurify compilation-top
        (check-equal?
         (current-compile #'(letrec ([f (lambda (x) x)])
                              (f 12)))
-        `(program () '12)))))
+        `(program () '12))
+       (check-equal?
+        (current-compile #'(letrec ([f (lambda (x) x)])
+                             (f f 12)))
+        `(program ()
+                  (let ([,f (closure ,f (#%plain-lambda (,x) (free () () ,x)))])
+                     (#%plain-app
+                      (#%plain-lambda (,x) (free (,f) () ,f))
+                      ,f '12))))
+       (check-equal?
+        (current-compile #'(letrec ([f (lambda () (g))]
+                                    [g (lambda () (f))])
+                             (f)))
+        `(program ()
+                  (letrec ([,f (#%plain-lambda (,'() ...) (free (,f) () (#%plain-app ,f)))])
+                    (#%plain-app ,f))))
+       (check-equal?
+        (current-compile #'(letrec ([f (lambda (x) x)])
+                             (f f)))
+        `(program ()
+                  (let ([,f (closure ,f (#%plain-lambda (,x) (free () () ,x)))])
+                    ,f))))))
 
 ;; ===================================================================================================
 
