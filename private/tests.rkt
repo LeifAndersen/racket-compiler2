@@ -102,7 +102,7 @@
                          (strip-context expression)))))))]))
 
   ;; Used to update the current compiler while testing
-  (define current-compile-number 0)
+  (define current-compile-number 1)
   (define current-compile-top (list-ref compilers current-compile-number))
   (define (update-current-compile!)
     (set! current-compile-number (+ current-compile-number 1))
@@ -1002,7 +1002,7 @@
                      (#%plain-app (primitive list)
                                   (#%plain-app (primitive syntax->datum) ,x)
                                   (#%plain-app (primitive syntax->datum) ,y)))))))))
-    
+ 
 ;; ===================================================================================================
 
 (module+ test
@@ -1160,6 +1160,7 @@
                                   (let ([x 6])
                                     (#%top . x))))
              (compile-compare #'(call-with-current-continuation (lambda (x) 12)))
+             ;; TODO, this test (compile-compare #'(syntax->datum #'(+ 1 2)))
              ;; TODO, this test
              #;(compile-compare #'(begin
                                   (module foo racket

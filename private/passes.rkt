@@ -1043,18 +1043,23 @@
          `(quote-syntax ,(add-syntax-to-table! global-table syntax-object))]))
 
 (define-pass reintroduce-syntax : Lscrubsyntax (e) -> Lreintroducesyntax ()
+  (definitions
+    (define global-syntax-table (make-parameter '())))
   (CompilationTop : compilation-top (e) -> compilation-top ()
                   [(program (,binding ...)
                             (,syntax-object ...)
                             ,top-level-form)
-                   (define compiled (syntax->zo #`(list #,@syntax-object)))
-                   (define syntax-table (zo:compilation-top-binding-namess compiled))
-                   `(program (,binding ...)
-                             ,(TopLevelForm top-level-form syntax-table))])
-  (TopLevelForm : top-level-form (e syntax-table) -> top-level-form ())
-  (Expr : expr (e syntax-table) -> expr ()
+                   (define compiled (syntax->zo #`(list #,@(for/list ([s (in-list syntax-object)])
+                                                             #`(quote-syntax #,s #:local)))))
+                   (define syntax-table (zo:prefix-stxs
+                                         (zo:compilation-top-prefix compiled)))
+                   (parameterize ([global-syntax-table syntax-table])
+                     `(program (,binding ...)
+                               ,(TopLevelForm top-level-form)))])
+  (TopLevelForm : top-level-form (e) -> top-level-form ())
+  (Expr : expr (e) -> expr ()
         [(quote-syntax ,eni)
-         (dict-ref syntax-table eni)]))
+         (list-ref (global-syntax-table) eni)]))
 
 (define-pass debruijn-indices : Lreintroducesyntax (e) -> Ldebruijn ()
   (definitions
@@ -1332,6 +1337,7 @@
         [(closure ,v ,lambda) (zo:closure (Lambda lambda) (variable-name v))]
         [(primitive ,eni)
          (zo:primval eni)]
+        [,stx-obj stx-obj]
         [(#%top ,eni1 ,eni2) (zo:toplevel eni1 eni2 #f #f)]
         [(#%unbox ,eni)
          (zo:localref #t eni #f #f #f)]
@@ -1368,8 +1374,6 @@
         [(begin0 ,expr ,expr* ...)
          (zo:beg0 (cons (Expr expr) (map Expr expr*)))]
         [(quote ,datum) datum]
-        [,stx-obj
-         (void)]
         [(with-continuation-mark ,expr1 ,expr2 ,expr3)
          (zo:with-cont-mark (Expr expr1) (Expr expr2) (Expr expr3))]
         [(#%plain-app ,expr ,expr* ...)

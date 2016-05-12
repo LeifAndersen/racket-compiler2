@@ -35,6 +35,7 @@
 
 (define-compiler compile
   expand-syntax*
+  disarm*
   (parse-and-rename parse)
   (lift-submodules modules)
   (lift-require-provide modules)
@@ -58,3 +59,10 @@
   (zo-marshal generate-bytecode)
   bytes->compiled-expression)
 
+
+; TODO, this needs to work
+#;
+(define code
+  #'(syntax->datum #'(+ 1 2)))
+
+;(compile/18 code)
