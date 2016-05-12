@@ -3,6 +3,7 @@
 (provide (all-defined-out))
 (require nanopass/base
          racket/bool
+         (only-in compiler/zo-structs stx-obj?)
          "utils.rkt")
 
 (define-language Lsrc
@@ -190,6 +191,7 @@
                      (- (syntax eni (syntax-body ...)))
                      (+ (syntax eni (v ...) (v* ...)
                                 (syntax-body ...)))))
+
 (define-language Lscrubreqprov
   (extends Lmodulevars)
   (raw-require-spec (raw-require-spec rrs)
@@ -326,8 +328,30 @@
         (+ (let ([v expr1]) expr)
            (let-void (v ...) expr))))
 
-(define-language Ldebruijn
+(define-language Lscrubsyntax
   (extends Lvoidlets)
+  (compilation-top (compilation-top)
+                   (- (program (binding ...) top-level-form))
+                   (+ (program (binding ...) (syntax-object ...) top-level-form)))
+  (expr (expr)
+        (- (quote-syntax syntax-object)
+           (quote-syntax-local syntax-object))
+        (+ (quote-syntax eni))))
+
+(define-language Lreintroducesyntax
+  (extends Lscrubsyntax)
+  (terminals
+   (- (syntax (syntax-object)))
+   (+ (stx-obj (stx-obj))))
+  (compilation-top (compilation-top)
+                   (- (program (binding ...) (syntax-object ...) top-level-form))
+                   (+ (program (binding ...) top-level-form)))
+  (expr (expr)
+        (- (quote-syntax eni))
+        (+ stx-obj)))
+
+(define-language Ldebruijn
+  (extends Lreintroducesyntax)
   (expr (expr)
         (- v
            (primitive id)

@@ -1018,12 +1018,47 @@
                       (set!-values (,v) ,expr1) ...
                       ,expr))]))
 
-(define-pass debruijn-indices : Lvoidlets (e) -> Ldebruijn ()
+(define-pass scrub-syntax : Lvoidlets (e) -> Lscrubsyntax ()
+  (definitions
+    (struct syntax-table (ticket
+                          objects)
+      #:mutable)
+    (define (make-syntax-table)
+      (syntax-table 0 '()))
+    (define (add-syntax-to-table! table object)
+      (define ticket (syntax-table-ticket table))
+      (set-syntax-table-ticket! (+ ticket 1))
+      (set-syntax-table-objects! (cons object (syntax-table-objects table)))
+      ticket)
+    (define global-table (make-syntax-table)))
+  (CompilationTop : compilation-top (e) -> compilation-top ()
+                  [(program (,binding ...) ,[top-level-form])
+                   `(program (,binding ...)
+                             (,(reverse (syntax-table-objects global-table)) ...)
+                             ,top-level-form)])
+  (Expr : expr (e) -> expr ()
+        [(quote-syntax ,syntax-object)
+         `(quote-syntax ,(add-syntax-to-table! global-table syntax-object))]
+        [(quote-syntax-local ,syntax-object)
+         `(quote-syntax ,(add-syntax-to-table! global-table syntax-object))]))
+
+(define-pass reintroduce-syntax : Lscrubsyntax (e) -> Lreintroducesyntax ()
+  (CompilationTop : compilation-top (e) -> compilation-top ()
+                  [(program (,binding ...)
+                            (,syntax-object ...)
+                            ,top-level-form)
+                   (define syntax-table '()) ;; TODO (compile syntax-object))
+                   `(program (,binding ...)
+                             ,(TopLevelForm top-level-form syntax-table))])
+  (TopLevelForm : top-level-form (e syntax-table) -> top-level-form ())
+  (Expr : expr (e syntax-table) -> expr ()))
+
+(define-pass debruijn-indices : Lreintroducesyntax (e) -> Ldebruijn ()
   (definitions
     (define-syntax-rule (formals->identifiers* fmls)
-      (formals->identifiers Lvoidlets fmls))
+      (formals->identifiers Lreintroducesyntax fmls))
     (define-syntax-rule (formals-rest?* fmls)
-      (formals-rest? Lvoidlets fmls))
+      (formals-rest? Lreintroducesyntax fmls))
     (define (extend-env env start ids)
       (for/fold ([env env] [ref start])
                 ([i (in-list ids)])
@@ -1330,9 +1365,7 @@
         [(begin0 ,expr ,expr* ...)
          (zo:beg0 (cons (Expr expr) (map Expr expr*)))]
         [(quote ,datum) datum]
-        [(quote-syntax ,syntax-object)
-         (void)]
-        [(quote-syntax-local ,syntax-object)
+        [,stx-obj
          (void)]
         [(with-continuation-mark ,expr1 ,expr2 ,expr3)
          (zo:with-cont-mark (Expr expr1) (Expr expr2) (Expr expr3))]

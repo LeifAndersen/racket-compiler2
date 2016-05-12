@@ -50,6 +50,8 @@
   raise-toplevel-variables
   closurify-letrec
   void-lets
+  scrub-syntax
+  reintroduce-syntax
   (debruijn-indices debruijn)
   (find-let-depth debruijn)
   (generate-zo-structs generate-bytecode)
