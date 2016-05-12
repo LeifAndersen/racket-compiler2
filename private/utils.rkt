@@ -1,28 +1,6 @@
 #lang racket/base
 
-(provide primitive-identifier?
-         primitive->symbol
-         primitive-table*
-         maybe-module-path?
-         phase-level?
-         declaration-keyword?
-         datum?
-         (struct-out variable)
-         make-variable
-         debug-variable-printer
-         current-variable-printer
-         current-variable-equal?
-         (struct-out binding)
-         make-binding
-         (struct-out operand)
-         make-operand
-         current-outer-pending-default-fuel
-         foldable?
-         effect-free?
-         return-true?
-         formals->identifiers
-         formals-rest?
-         compiler-value?)
+(provide (all-defined-out))
 
 (require nanopass/base
          racket/set
@@ -83,7 +61,7 @@
   [(define (write-proc data port mode)
      ((current-variable-printer) data port mode))]
   #:methods gen:equal+hash
-  [(define (equal-proc a b t) ((current-variable-equal?) a b))
+  [(define (equal-proc a b t) (eq? (variable-binding a) (variable-binding b)))
    (define (hash-proc v t) (eq-hash-code v))
    (define (hash2-proc v t) (eq-hash-code v))])
 (define (make-variable name
@@ -103,8 +81,6 @@
                        (variable-assigned? obj)
                        (variable-referenced? obj)))))
 
-(define current-variable-equal?
-  (make-parameter (lambda (a b) (eq? (variable-binding a) (variable-binding b)))))
 (define current-variable-printer
   (make-parameter
    (make-constructor-style-printer

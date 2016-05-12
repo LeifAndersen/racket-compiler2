@@ -193,6 +193,10 @@
                  `(set! ,(parse-expr #'id env) ,(parse-expr #'body env))]
                 [(quote datum)
                  `(quote ,(syntax->datum #'datum))]
+                [(quote-syntax datum)
+                 `(quote-syntax ,#'datum)]
+                [(quote-syntax datum #:local)
+                 `(quote-syntax-local ,#'datum)]
                 [(with-continuation-mark key val result)
                  `(with-continuation-mark ,(parse-expr #'key env) ,(parse-expr #'val env)
                     ,(parse-expr #'result env))]
@@ -1326,7 +1330,9 @@
         [(begin0 ,expr ,expr* ...)
          (zo:beg0 (cons (Expr expr) (map Expr expr*)))]
         [(quote ,datum) datum]
-        [(quote-syntax ,datum)
+        [(quote-syntax ,syntax-object)
+         (void)]
+        [(quote-syntax-local ,syntax-object)
          (void)]
         [(with-continuation-mark ,expr1 ,expr2 ,expr3)
          (zo:with-cont-mark (Expr expr1) (Expr expr2) (Expr expr3))]

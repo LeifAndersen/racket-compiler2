@@ -17,6 +17,7 @@
    (phase-level (phase-level))
    (false (false))
    (exact-nonnegative-integer (exact-nonnegative-integer eni))
+   (syntax (syntax-object))
    (boolean (boolean)))
   (top-level-form (top-level-form)
                   general-top-level-form
@@ -55,7 +56,8 @@
           expr* ... expr)
         (set! v expr)
         (quote datum)
-        (quote-syntax datum)
+        (quote-syntax syntax-object)
+        (quote-syntax-local syntax-object)
         (with-continuation-mark expr1 expr2 expr3)
         (#%plain-app expr expr* ...)
         (#%top . v)
