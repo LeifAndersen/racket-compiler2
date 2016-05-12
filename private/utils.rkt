@@ -5,13 +5,12 @@
 (require nanopass/base
          racket/set
          racket/struct
+         racket/port
          rackunit
-         (rename-in racket/base
-                    [compile base:compile]
-                    [current-compile base:current-compile]))
+         compiler/zo-parse
+         syntax/toplevel)
 
 (require/expose compiler/decompile (primitive-table))
-
 
 ; Pointer to a primitive module
 ; For use in primitive-identifier? and primitive->symbol
@@ -137,7 +136,7 @@
 (define (foldable? primitive)
   (define foldable-set
     (set '+ '- '* '/ '= '< '> '<= '>= 'exp 'expt 'sqrt 'symbol->string 'string->symbol
-         'string-append 'append))
+         'string-append 'append 'cons 'car 'cdr 'list-ref 'length 'eq?))
   (cond
     [(set-member? foldable-set primitive) #t]
     [else #f]))
@@ -161,3 +160,20 @@
   (nanopass-case (lang top-level-form) exp
                  [(quote ,datum) #t]
                  [else #f]))
+
+; Converts a compiler expression to a ZO file.
+;  Similar to zordoz
+; Compiled-Expression -> ZO
+(define (compiled-expression->zo compiled)
+  (define-values (in out) (make-pipe))
+  (display compiled out)
+  (close-output-port out)
+  (define y (port->bytes in))
+  (close-input-port in)
+  (zo-parse (open-input-bytes y)))
+
+; Compiles a syntax object and converts it to a zo
+;  Similar to zordoz
+; Syntax -> ZO
+(define (syntax->zo stx)
+  (compiled-expression->zo (compile-syntax (expand-syntax-top-level-with-compile-time-evals stx))))

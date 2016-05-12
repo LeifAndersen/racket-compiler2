@@ -980,8 +980,29 @@
 ;; ===================================================================================================
 
 (module+ test
-  (update-current-compile!))
-
+  (update-current-compile!)
+  (block
+    (define x (make-variable 'x))
+    (define y (make-variable 'y))
+    (define z (make-variable 'z))
+    (define-compiler-test Lscrubsyntax compilation-top
+      (check-compiler-equal?
+       (current-compile #'(syntax->datum #'(+ 1 2)))
+       `(program ()
+                 (,#'(+ 1 2))
+                 (#%plain-app (primitive syntax->datum) (quote-syntax 0))))
+      (check-compiler-equal?
+       (current-compile #'(let ([x (quote-syntax (+ 1 2))])
+                            (let ([y (quote-syntax (+ 3 4) #:local)])
+                              (list (syntax->datum x) (syntax->datum y)))))
+       `(program ()
+                 (,#'(+ 1 2) ,#'(+ 3 4))
+                 (let ([,x (quote-syntax 0)])
+                   (let ([,y (quote-syntax 1)])
+                     (#%plain-app (primitive list)
+                                  (#%plain-app (primitive syntax->datum) ,x)
+                                  (#%plain-app (primitive syntax->datum) ,y)))))))))
+    
 ;; ===================================================================================================
 
 (module+ test
