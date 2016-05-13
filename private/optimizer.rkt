@@ -602,7 +602,25 @@
                 (decrement! size-counter 1)
                 `(letrec ([,(dict-keys filtered-vars)
                            ,(map operand-value (dict-values filtered-vars))] ...)
-                   ,expr*)])])
+                   ,expr*)])]
+        [(case-lambda ,lambda ...)
+         (match context
+           ['effect `'#t]
+           ['teset `'#t]
+           ['value
+            (decrement! size-counter 1)
+            `(case-lambda ,(map (curryr Lambda context env effort-counter size-counter) lambda) ...)]
+           [(struct* app ())
+            (define res
+              (for/fold ([acc #f])
+                        ([l (in-list lambda)])
+                (or acc
+                    (nanopass-case (Lpurifyletrec lambda) l
+                                   [(#%plain-lambda ,formals ,abody)
+                                    (define opnds (app-operands context))
+                                    (and (operands-match? formals opnds)
+                                         (Lambda l context env effort-counter size-counter))]))))
+            (or res `(case-lambda ,lambda ...))])])
   
   (Lambda : lambda (e [context context]
                       [env env]

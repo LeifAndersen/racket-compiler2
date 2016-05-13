@@ -348,7 +348,7 @@
          (values `(#%plain-app ,expr ,expr* ...)
                  (apply set-union assigned assigned*))]
         [(case-lambda ,[lambda assigned] ...)
-         (values `(case-lambda ,[lambda assigned] ...)
+         (values `(case-lambda ,lambda ...)
                  (apply set-union '() assigned))])
   ;; Also *should* really be generated
   (TopLevelForm : top-level-form (e) -> top-level-form ('())

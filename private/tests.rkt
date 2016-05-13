@@ -698,7 +698,22 @@
                   (fold (cdr l) (f init (car l)) f)))
             (define (pow-sum l n)
               (fold l 0 (lambda (x y) (+ (expt x n) (expt y n)))))
-            (pow-sum '(1 2 3) 2))))))
+            (pow-sum '(1 2 3) 2)))
+       (check-compiler-equal?
+        (current-compile
+         #'(case-lambda [() 10]
+                        [(x) x]
+                        [(x y . z) z]
+                        [x x]))
+        `(case-lambda [#%plain-lambda (,'() ...) (assigned () '10)]
+                      [#%plain-lambda (,x) (assigned () ,x)]
+                      [#%plain-lambda (,x ,y . ,z) (assigned () ,z)]
+                      [#%plain-lambda ,x (assigned () ,x)]))
+       (check-compiler-equal?
+        (current-compile
+         #'((case-lambda [(x) x]
+                         [(x y) (+ x y)]) 42))
+        `'42))))
 
 ;; ===================================================================================================
 
