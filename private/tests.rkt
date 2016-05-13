@@ -701,6 +701,11 @@
             (pow-sum '(1 2 3) 2)))
        (check-compiler-equal?
         (current-compile
+         #'((lambda (x . y) (apply + x y))
+            5 6 7))
+        `(#%plain-app (primitive apply) (primitive +) '5 ','(6 7)))
+       (check-compiler-equal?
+        (current-compile
          #'(case-lambda [() 10]
                         [(x) x]
                         [(x y . z) z]

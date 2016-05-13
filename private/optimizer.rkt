@@ -73,7 +73,7 @@
 (define (foldable? primitive)
   (define foldable-set
     (set '+ '- '* '/ '= '< '> '<= '>= 'exp 'expt 'sqrt 'symbol->string 'string->symbol
-         'string-append 'append 'cons 'car 'cdr 'list-ref 'length 'eq?))
+         'string-append 'append 'cons 'car 'cdr 'list-ref 'length 'eq? 'apply 'list))
   (cond
     [(set-member? foldable-set primitive) #t]
     [else #f]))
