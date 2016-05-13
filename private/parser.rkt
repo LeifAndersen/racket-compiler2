@@ -292,7 +292,7 @@
                               (syntax-parse form
                                 #:literals (quote lib file planet)
                                 [i:id (syntax-e #'i)]
-                                ; [s:string (syntax-e #'s)] TODO proper string syntax calss
+                                [s:str (syntax-e #'s)]
                                 [(quote id:id) `(quote* ,(syntax-e #'id))]
                                 [(lib s ...)
                                  `(lib ,(for/list ([i (in-list (syntax->list #'(s ...)))])
@@ -305,7 +305,9 @@
                                            ,(syntax-e #'s3)
                                            ,(for/list ([i (in-list (syntax->list #'(s4 ...)))])
                                               (syntax-e i)) ...))]
-                                [else (syntax-e #'path)]))
+                                [else
+                                 #:when (path? (syntax-e #'else))
+                                 (syntax-e #'else)]))
 
   (parse-phaseless-prov-spec : * (form env) -> phaseless-prov-spec ()
                              (syntax-parse form

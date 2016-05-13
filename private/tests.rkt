@@ -187,6 +187,7 @@
                              (#%require (only racket/match match)
                                         (all-except racket/match match)
                                         (rename racket/match match2 match)
+                                        (prefix match2: racket/match)
                                         (prefix-all-except match: racket/match match)
                                         ; TODO (planet "match" ("match" "match")) ; Not a real package
                                         ))))
@@ -194,6 +195,7 @@
           ((#%require (only racket/match ,match)
                       (all-except racket/match ,match)
                       (rename racket/match ,match2 ,match)
+                      (prefix-all-except match2: racket/match)
                       (prefix-all-except match: racket/match ,match)
                       ; TODO (planet "match" ("match" "match"))
                       ))))
@@ -217,7 +219,37 @@
       `(#%plain-app (primitive eval) (quote-syntax ,#'(+ 1 2))))
      (check-compiler-equal?
       (current-compile #`(eval (quote-syntax (+ 1 2) #:local)))
-      `(#%plain-app (primitive eval) (quote-syntax-local ,#'(+ 1 2)))))))
+      `(#%plain-app (primitive eval) (quote-syntax-local ,#'(+ 1 2))))
+     (check-compiler-equal?
+      (current-compile #'(begin
+                           (define x 5)
+                           (#%variable-reference (#%top . x))))
+      `(begin*
+         (define-values (,x) '5)
+         (#%variable-reference-top ,x)))
+     (check-compiler-equal?
+      (current-compile #'(module foo racket/base
+                           (#%plain-module-begin
+                            (#%require (for-label racket/match))
+                            (#%provide (for-label match))
+                            (define x 5)
+                            (#%provide (protect x)))))
+      `(module foo racket/base
+         ((#%require (for-meta #f racket/match))
+          (#%provide (for-meta* #f ,match))
+          (define-values (,x) '5)
+          (#%provide (protect ,x)))))
+     (check-compiler-equal?
+      (current-compile #'(module foo racket/base
+                           (#%plain-module-begin
+                            (module bar racket/base
+                              (#%plain-module-begin
+                               42))
+                            (#%require (submod "." bar)))))
+      `(module foo racket/base
+         ((submodule bar racket/base
+            ('42))
+          (#%require (submod "." bar))))))))
 
 ;; ===================================================================================================
 
