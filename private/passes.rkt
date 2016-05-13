@@ -32,339 +32,6 @@
          "languages.rkt"
          "utils.rkt")
 
-(define current-global-env/parse-and-rename (make-parameter (make-hash)))
-
-;; Parse and alpha-rename expanded program
-(define-pass parse-and-rename : * (form) -> Lsrc ()
-  (definitions
-    ; Initial environment for local variables
-    (define initial-env (hash))
-    (define (extend-env env vars)
-      (for/fold ([acc env])
-                ([var (in-list vars)])
-        (define var* (syntax->datum var))
-        (dict-set acc var* (make-variable var*
-                                          #:source-location (syntax-source var)))))
-    (define ((lookup-env env) var)
-      (define var* (syntax->datum var))
-      (dict-ref env var*
-                (lambda ()
-                  (dict-ref (current-global-env/parse-and-rename) var*
-                            (lambda ()
-                              (let ([x (make-variable var*
-                                                      #:source-location (syntax-source var))])
-                                (dict-set! (current-global-env/parse-and-rename) var* x)
-                                x)))))))
-
-  (parse-top : * (form env) -> top-level-form ()
-             (syntax-parse form
-               #:literals (#%expression module #%plain-module-begin begin begin-for-syntax)
-               [(#%expression body)
-                `(#%expression ,(parse-expr #'body env))]
-               [(module id:id path
-                  (#%plain-module-begin body ...))
-                (parameterize ([current-global-env/parse-and-rename (make-hash)])
-                  `(module ,(syntax->datum #'id) ,(syntax->datum #'path)
-                     (,(for/list ([i (in-list (syntax->list #'(body ...)))])
-                         (parse-mod i env)) ...)))]
-               [(begin body ...)
-                `(begin* ,(for/list ([i (in-list (syntax->list #'(body ...)))])
-                            (parse-top i env)) ...)]
-               [(begin-for-syntax body ...)
-                `(begin-for-syntax* ,(for/list ([i (in-list (syntax->list #'(body ...)))])
-                                       (parse-top (syntax-shift-phase-level i -1) env)) ...)]
-               [else
-                (parse-gen #'else env)]))
-
-  (parse-mod : * (form env) -> module-level-form ()
-             (syntax-parse form
-               #:literals (#%provide begin-for-syntax #%declare module module*
-                                     #%plain-module-begin)
-               [(#%provide spec ...)
-                `(#%provide ,(for/list ([s (in-list (syntax->list #'(spec ...)))])
-                               (parse-raw-provide-spec s env)) ...)]
-               [(begin-for-syntax body ...)
-                `(begin-for-syntax ,(for/list ([i (in-list (syntax->list #'(body ...)))])
-                                      (parse-mod (syntax-shift-phase-level i -1) env)) ...)]
-               [(#%declare keyword ...)
-                `(#%declare ,(syntax->list #'(keyword ...)) ...)]
-               [(module id:id path
-                  (#%plain-module-begin body ...))
-                (parameterize ([current-global-env/parse-and-rename (make-hash)])
-                  `(submodule ,(syntax->datum #'id) ,(syntax->datum #'path)
-                              (,(for/list ([i (in-list (syntax->list #'(body ...)))])
-                                  (parse-mod i env)) ...)))]
-               [(module* id:id path
-                  (#%plain-module-begin body ...))
-                (parameterize ([current-global-env/parse-and-rename (make-hash)])
-                  `(submodule* ,(syntax->datum #'id) ,(syntax->datum #'path)
-                               (,(for/list ([i (in-list (syntax->list #'(body ...)))])
-                                   (parse-mod i env)) ...)))]
-               [else
-                (parse-gen #'else env)]))
-
-  (parse-gen : * (form env) -> general-top-level-form ()
-             (syntax-parse form
-               #:literals (define-values define-syntaxes #%require)
-               [(define-values (id:id ...) body)
-                ;(define env* (extend-env env (syntax->list #'(id ...))))
-                `(define-values (,(for/list ([i (in-list (syntax->list #'(id ...)))])
-                                    (parse-expr i env)) ...)
-                   ,(parse-expr #'body env))]
-               [(define-syntaxes (id:id ...) body)
-                ;(define env* (extend-env env (syntax->list #'(id ...))))
-                `(define-syntaxes (,(for/list ([i (in-list (syntax->list #'(id ...)))])
-                                      (parse-expr i env)) ...)
-                   ,(parse-expr (syntax-shift-phase-level #'body -1) env))]
-               [(#%require spec ...)
-                `(#%require ,(for/list ([s (in-list (syntax->list #'(spec ...)))])
-                               (parse-raw-require-spec s env)) ...)]
-               [else
-                (parse-expr #'else env)]))
-
-  (parse-expr : * (form env) -> expr ()
-              (syntax-parse form
-                #:literals (#%plain-lambda case-lambda if begin begin0 let-values letrec-values set!
-                                           quote quote-syntax with-continuation-mark #%plain-app
-                                           #%top #%variable-reference)
-                [id:id (if (primitive-identifier? #'id)
-                           `(primitive ,(primitive->symbol #'id))
-                           ((lookup-env env) #'id))]
-                [(#%plain-lambda formals body* ... body)
-                 (define-values (formals* env*) (parse-formals #'formals env))
-                 `(#%plain-lambda ,formals*
-                                  ,(for/list ([b (in-list (syntax->list #'(body* ...)))])
-                                     (parse-expr b env*)) ...
-                                  ,(parse-expr #'body env*))]
-                [(case-lambda (formals body* ... body) ...)
-                 (match (for/list ([formal (in-list (syntax->list #'(formals ...)))]
-                                   [b1 (in-list (syntax->list #'(body ...)))]
-                                   [b (in-list (syntax->list #'((body* ...) ...)))])
-                          (define-values (formals* env*) (parse-formals formal env))
-                          (list formals*
-                                (for/list ([b* (in-list (syntax->list b))])
-                                  (parse-expr b* env*))
-                                (parse-expr b1 env*)))
-                   [`((,formal ,body* ,body) ...)
-                    `(case-lambda (,formal ,body* ... ,body) ...)])]
-                [(if test tbranch fbranch)
-                 `(if ,(parse-expr #'test env)
-                      ,(parse-expr #'tbranch env)
-                      ,(parse-expr #'fbranch env))]
-                [(begin body* ... body)
-                 `(begin ,(for/list ([b (in-list (syntax->list #'(body* ...)))])
-                            (parse-expr b env)) ...
-                         ,(parse-expr #'body env))]
-                [(begin0 body body* ...)
-                 `(begin0 ,(parse-expr #'body env)
-                          ,(for/list ([b (in-list (syntax->list #'(body* ...)))])
-                             (parse-expr b env)) ...)]
-                [(let-values ([(ids:id ...) val] ...)
-                   body* ... body)
-                 (define env* (extend-env env
-                                          (apply
-                                           append
-                                           (map syntax->list (syntax->list #'((ids ...) ...))))))
-                 (match (for/list ([i (in-list (syntax->list #'((ids ...) ...)))]
-                                   [v (in-list (syntax->list #'(val ...)))])
-                          (list (map (lookup-env env*) (syntax->list i))
-                                (parse-expr v env)))
-                   [`([(,args ...) ,exp] ...)
-                    `(let-values ([(,args ...) ,exp] ...)
-                       ,(for/list ([b (in-list (syntax->list #'(body* ...)))])
-                          (parse-expr b env*)) ...
-                       ,(parse-expr #'body env*))])]
-                [(letrec-values ([(ids:id ...) val] ...)
-                   body* ... body)
-                 (define env* (extend-env env
-                                          (apply
-                                           append
-                                           (map syntax->list (syntax->list #'((ids ...) ...))))))
-                 (match (for/list ([i (in-list (syntax->list #'((ids ...) ...)))]
-                                   [v (in-list (syntax->list #'(val ...)))])
-                          (list (map (lookup-env env*) (syntax->list i))
-                                (parse-expr v env*)))
-                   [`([(,args ...) ,exp] ...)
-                    `(letrec-values ([(,args ...) ,exp] ...)
-                       ,(for/list ([b (in-list (syntax->list #'(body* ...)))])
-                          (parse-expr b env*)) ...
-                       ,(parse-expr #'body env*))])]
-                [(set! id:id body)
-                 `(set! ,(parse-expr #'id env) ,(parse-expr #'body env))]
-                [(quote datum)
-                 `(quote ,(syntax->datum #'datum))]
-                [(quote-syntax datum)
-                 `(quote-syntax ,#'datum)]
-                [(quote-syntax datum #:local)
-                 `(quote-syntax-local ,#'datum)]
-                [(with-continuation-mark key val result)
-                 `(with-continuation-mark ,(parse-expr #'key env) ,(parse-expr #'val env)
-                    ,(parse-expr #'result env))]
-                [(#%plain-app func body ...)
-                 `(#%plain-app ,(parse-expr #'func env)
-                               ,(for/list ([i (in-list (syntax->list #'(body ...)))])
-                                  (parse-expr i env)) ...)]
-                [(#%top . id:id)
-                 `(#%top . ,(parse-expr #'id (hash)))]
-                [(#%variable-reference id:id)
-                 `(#%variable-reference ,(parse-expr #'id env))]
-                [(#%variable-reference (#%top . id:id))
-                 `(#%variable-reference-top ,((lookup-env env) #'id))]
-                [(#%variable-reference)
-                 `(#%variable-reference)]))
-
-  (parse-formals : * (formals env) -> formals (env)
-                (syntax-parse formals
-                  [(ids:id ...)
-                   (define env* (extend-env env (syntax->list #'(ids ...))))
-                   (values
-                    `(,(for/list ([i (in-list (syntax->list #'(ids ...)))])
-                         (parse-expr i env*)) ...)
-                    env*)]
-                  [(id:id ids:id ... . rest:id)
-                   (define env* (extend-env env (list* #'id #'rest (syntax->list #'(ids ...)))))
-                   (values
-                    `(,(parse-expr #'id env*)
-                      ,(for/list ([i (in-list (syntax->list #'(ids ...)))])
-                         (parse-expr i env*)) ...
-                      . ,(parse-expr #'rest env*))
-                    env*)]
-                  [rest:id
-                   (define env* (extend-env env (list #'rest)))
-                   (values (parse-expr #'rest env*) env*)]))
-
-  (parse-raw-require-spec : * (form env) -> raw-require-spec ()
-                          (syntax-parse form
-                            #:datum-literals (for-meta for-syntax for-template for-label just-meta)
-                            [(for-meta phase-level phaseless-req-spec ...)
-                             `(for-meta
-                               ,(syntax-e #'phase-level)
-                               ,(for/list ([i (in-list (syntax->list #'(phaseless-req-spec ...)))])
-                                  (parse-phaseless-req-spec i env)) ...)]
-                            [(for-syntax phaseless-req-spec ...)
-                             `(for-meta
-                               ,1
-                               ,(for/list ([i (in-list (syntax->list #'(phaseless-req-spec ...)))])
-                                  (parse-phaseless-req-spec i env)) ...)]
-                            [(for-template phaseless-req-spec ...)
-                             `(for-meta
-                               ,-1
-                               ,(for/list ([i (in-list (syntax->list #'(phaseless-req-spec ...)))])
-                                  (parse-phaseless-req-spec i env)) ...)]
-                            [(for-label phaseless-req-spec ...)
-                             `(for-meta
-                               ,#f
-                               ,(for/list ([i (in-list (syntax->list #'(phaseless-req-spec ...)))])
-                                  (parse-phaseless-req-spec i env)) ...)]
-                            [(just-meta phase-level raw-req-spec ...)
-                             `(just-meta
-                               ,(syntax-e #'phase-level)
-                               ,(for/list ([i (in-list (syntax->list #'(raw-req-spec ...)))])
-                                  (parse-raw-require-spec i env)) ...)]
-                            [else (parse-phaseless-req-spec #'else env)]))
-
-  (parse-phaseless-req-spec : * (form env) -> phaseless-req-spec ()
-                            (syntax-parse form
-                              #:datum-literals (only prefix all-except prefix-all-except rename)
-                              [(only raw-module-path ids:id ...)
-                               `(only ,(parse-raw-module-path #'raw-module-path env)
-                                      ,(map (curryr parse-expr env) (syntax->list #'(ids ...))) ...)]
-                              [(prefix id:id raw-module-path)
-                               `(prefix-all-except ,(syntax-e #'id)
-                                                   ,(parse-raw-module-path #'raw-module-path env))]
-                              [(all-except raw-module-path ids:id ...)
-                               `(all-except ,(parse-raw-module-path #'raw-module-path env)
-                                            ,(map (curryr parse-expr env)
-                                                  (syntax->list #'(ids ...))) ...)]
-                              [(prefix-all-except id:id raw-module-path ids:id ...)
-                               `(prefix-all-except
-                                 ,(syntax-e #'id)
-                                 ,(parse-raw-module-path #'raw-module-path env)
-                                 ,(map (curryr parse-expr env) (syntax->list #'(ids ...))) ...)]
-                              [(rename raw-module-path id1:id id2:id)
-                               `(rename ,(parse-raw-module-path #'raw-module-path env)
-                                        ,(parse-expr #'id1 env)
-                                        ,(parse-expr #'id2 env))]
-                              [else (parse-raw-module-path #'else env)]))
-
-  (parse-raw-provide-spec : * (form env) -> raw-provide-spec ()
-                          (syntax-parse form
-                            #:literals (for-meta for-syntax for-label)
-                            #:datum-literals (protect)
-                            [(for-meta phase-level phaseless-prov-spec)
-                             `(for-meta* ,(syntax-e #'phase-level)
-                                         ,(parse-phaseless-prov-spec #'phaseless-prov-spec env))]
-                            [(for-syntax phaseless-prov-spec)
-                             `(for-meta* ,1 ,(parse-phaseless-prov-spec #'phaseless-prov-spec env))]
-                            [(for-label phaseless-prov-spec)
-                             `(for-meta* ,#f ,(parse-phaseless-prov-spec #'phaseless-prov-spec env))]
-                            [(protect raw-provide-spec)
-                             `(protect ,(parse-raw-provide-spec #'raw-provide-spec env))]
-                            [else (parse-phaseless-prov-spec #'else env)]))
-
-  (parse-raw-module-path : * (form env) -> raw-module-path ()
-                         (syntax-parse form
-                           #:literals (submod)
-                           [(submod path ids:id ...+)
-                            `(submod ,(parse-raw-root-module-path #'path env)
-                                     ,(for/list ([i (in-list (syntax->list #'(ids ...)))])
-                                        (syntax-e i)) ...)]
-                           [else (parse-raw-root-module-path #'else env)]))
-
-  (parse-raw-root-module-path : * (form env) -> raw-root-module-path ()
-                              (syntax-parse form
-                                #:literals (quote lib file planet)
-                                [i:id (syntax-e #'i)]
-                                ; [s:string (syntax-e #'s)] TODO proper string syntax calss
-                                [(quote id:id) `(quote* ,(syntax-e #'id))]
-                                [(lib s ...)
-                                 `(lib ,(for/list ([i (in-list (syntax->list #'(s ...)))])
-                                          (syntax-e i)) ...)]
-                                [(file s) `(file ,(syntax-e #'s))]
-                                [(planet s1
-                                         (s2 s3 s4 ...))
-                                 `(planet ,(syntax-e #'s1)
-                                          (,(syntax-e #'s2)
-                                           ,(syntax-e #'s3)
-                                           ,(for/list ([i (in-list (syntax->list #'(s4 ...)))])
-                                              (syntax-e i)) ...))]
-                                [else (syntax-e #'path)]))
-
-  (parse-phaseless-prov-spec : * (form env) -> phaseless-prov-spec ()
-                             (syntax-parse form
-                               #:datum-literals (rename struct all-from all-from-except all-define
-                                                        all-defined-except prefix-all-defined
-                                                        prefix-all-defined-except expand protect)
-                               [id:id (parse-expr #'id env)]
-                               [(rename id1:id id2:id)
-                                `(rename* ,(parse-expr #'id1 env) ,(parse-expr #'id2 env))]
-                               [(struct name:id (fields:id ...))
-                                `(struct ,(parse-expr #'name env)
-                                   (,(map (curryr parse-expr env)
-                                          (syntax->list #'(fields ...))) ...))]
-                               [(all-from raw-module-path)
-                                `(all-from-except ,(parse-raw-module-path #'raw-module-path env))]
-                               [(all-from-except raw-module-path ids:id ...)
-                                `(all-from-except
-                                  ,(parse-raw-module-path #'raw-module-path env)
-                                  ,(map (curryr parse-expr env) (syntax->list #'(ids ...))) ...)]
-                               [(all-defined) `(all-defined-except)]
-                               [(all-defined-except ids:id ...)
-                                `(all-defined-except
-                                  ,(map (curryr parse-expr env) (syntax->list #'(ids ...))) ...)]
-                               [(prefix-all-defined prefix:id)
-                                `(prefix-all-defined-except ,(syntax-e #'prefix))]
-                               [(prefix-all-defined-except prefix:id ids:id ...)
-                                `(prefix-all-defined-except
-                                  ,(syntax-e #'prefix)
-                                  ,(map (curryr parse-expr env) (syntax->list #'(ids ...))) ...)]
-                               [(protect spec ...)
-                                `(protect*
-                                  ,(map (curryr parse-phaseless-prov-spec env)
-                                        (syntax->list #'(spec ...))) ...)]))
-
-  (parse-top form initial-env))
-
 (define-pass lift-submodules : Lsrc (e) -> Lsubmodules ()
   (TopLevelForm : top-level-form (e) -> top-level-form ()
                 [(module ,id ,module-path
@@ -1020,27 +687,71 @@
 
 (define-pass scrub-syntax : Lvoidlets (e) -> Lscrubsyntax ()
   (definitions
+
+    ;; Syntax Table maps integers to syntax objects
     (struct syntax-table (ticket
                           objects)
       #:mutable)
+
+    ;; Constructs a new Syntax Table
+    ;; -> Syntax-Table
     (define (make-syntax-table)
       (syntax-table 0 '()))
+
+    ;; Add an element to the syntax table, returning the object's ticket,
+    ;;   and raising the ticket value for the next insertion
+    ;; Syntax-Table Any -> Syntax-Table
     (define (add-syntax-to-table! table object)
       (define ticket (syntax-table-ticket table))
       (set-syntax-table-ticket! table (+ ticket 1))
       (set-syntax-table-objects! table (cons object (syntax-table-objects table)))
       ticket)
-    (define global-table (make-syntax-table)))
+
+    ;; Global table tat will store all of syntax objects for pre-compiling
+    ;;  with internal Racket compiler
+    ;;  (Should really be changed to handle the compilation on its own)
+    (define global-table (make-syntax-table))
+
+    ;; Module level syntax table for mapping syntax objects to their location in the
+    ;;  prefix struct.
+    (define current-module-table (make-parameter (make-syntax-table))))
   (CompilationTop : compilation-top (e) -> compilation-top ()
                   [(program (,binding ...) ,[top-level-form])
                    `(program (,binding ...)
                              (,(reverse (syntax-table-objects global-table)) ...)
+                             (,(reverse (syntax-table-objects (current-module-table))) ...)
                              ,top-level-form)])
+  (TopLevelForm : top-level-form (e) -> top-level-form ()
+                [,submodule-form
+                 (parameterize ([current-module-table (make-syntax-table)])
+                   (SubmoduleForm submodule-form))])
+  (SubmoduleForm : submodule-form (e) -> submodule-form ()
+                 [(module ,id ,module-path (,v ...) (,v* ...)
+                    (,[raw-provide-spec] ...)
+                    (,[raw-require-spec] ...)
+                    (,[module-level-form] ...)
+                    (,[syntax-level-form] ...)
+                    (,submodule-form ...)
+                    (,submodule-form* ...))
+                  (define sf (parameterize ([current-module-table (make-syntax-table)])
+                               (SubmoduleForm submodule-form)))
+                  (define sf* (parameterize ([current-module-table (make-syntax-table)])
+                                (SubmoduleForm submodule-form)))
+                  `(module ,id ,module-path (,v ...) (,v* ...)
+                     (,(reverse (syntax-table-objects (current-module-table))) ...)
+                     (,raw-provide-spec ...)
+                     (,raw-require-spec ...)
+                     (,module-level-form ...)
+                     (,syntax-level-form ...)
+                     (,sf ...)
+                     (,sf* ...))])
   (Expr : expr (e) -> expr ()
         [(quote-syntax ,syntax-object)
-         `(quote-syntax ,(add-syntax-to-table! global-table syntax-object))]
+         (define key (add-syntax-to-table! global-table syntax-object))
+         `(quote-syntax ,(add-syntax-to-table! (current-module-table) key))]
         [(quote-syntax-local ,syntax-object)
-         `(quote-syntax ,(add-syntax-to-table! global-table syntax-object))]))
+         (define key (add-syntax-to-table! global-table syntax-object))
+         `(quote-syntax ,(add-syntax-to-table! (current-module-table) key))]))
 
 (define-pass reintroduce-syntax : Lscrubsyntax (e) -> Lreintroducesyntax ()
   (definitions
@@ -1048,18 +759,34 @@
   (CompilationTop : compilation-top (e) -> compilation-top ()
                   [(program (,binding ...)
                             (,syntax-object ...)
+                            (,eni ...)
                             ,top-level-form)
-                   (define compiled (syntax->zo #`(list #,@(for/list ([s (in-list syntax-object)])
-                                                             #`(quote-syntax #,s #:local)))))
+                   (define compiled (car (toplevel-syntax->zo
+                                          #`(list #,@(for/list ([s (in-list syntax-object)])
+                                                       #`(quote-syntax #,s #:local))))))
                    (define syntax-table (zo:prefix-stxs
                                          (zo:compilation-top-prefix compiled)))
                    (parameterize ([global-syntax-table syntax-table])
                      `(program (,binding ...)
+                               (,(map (curry list-ref (global-syntax-table)) eni) ...)
                                ,(TopLevelForm top-level-form)))])
   (TopLevelForm : top-level-form (e) -> top-level-form ())
-  (Expr : expr (e) -> expr ()
-        [(quote-syntax ,eni)
-         (list-ref (global-syntax-table) eni)]))
+  (SubmoduleForm : submodule-form (e) -> submodule-form ()
+                 [(module ,id ,module-path (,v ...) (,v* ...) (,eni ...)
+                    (,[raw-provide-spec] ...)
+                    (,[raw-require-spec] ...)
+                    (,[module-level-form] ...)
+                    (,[syntax-level-form] ...)
+                    (,[submodule-form] ...)
+                    (,[submodule-form*] ...))
+                  `(module ,id ,module-path (,v ...) (,v* ...)
+                     (,(map (curry list-ref (global-syntax-table)) eni) ...)
+                     (,raw-provide-spec ...)
+                     (,raw-require-spec ...)
+                     (,module-level-form ...)
+                     (,syntax-level-form ...)
+                     (,submodule-form ...)
+                     (,submodule-form* ...))]))
 
 (define-pass debruijn-indices : Lreintroducesyntax (e) -> Ldebruijn ()
   (definitions
@@ -1117,6 +844,7 @@
         [(set!-global ,v ,[expr])
          `(set!-global ,(- frame prefix-frame) ,(dict-ref global-env v) ,expr)]
         [(#%top . ,v) `(#%top ,(- frame prefix-frame) ,(dict-ref global-env v))]
+        [(quote-syntax ,eni) `(quote-syntax ,(- frame prefix-frame) ,eni)]
         [(#%variable-reference)
          `(#%variable-reference-none ,(- frame prefix-frame) ,(hash-ref global-env #f))]
         [(#%variable-reference-top ,v) `(#%variable-reference-top 0)] ;; TODO: Global vars
@@ -1152,7 +880,7 @@
                  `(begin* ,(map TopLevelForm top-level-form) ...)])
   (SubmoduleForm : submodule-form (e [env '()] [frame 0] [global-env '()] [prefix-frame '()])
                  -> submodule-form ()
-                 [(module ,id ,module-path (,v* ...) (,v** ...)
+                 [(module ,id ,module-path (,v* ...) (,v** ...) (,stx ...)
                           (,[raw-provide-spec] ...)
                           (,[raw-require-spec] ...)
                           (,module-level-form ...)
@@ -1161,7 +889,7 @@
                           (,submodule-form* ...))
                   (define global-env* (hash-union global-env (make-global-env v*)
                                                   #:combine (lambda (v1 v2) v2)))
-                  `(module ,id ,module-path (,v* ...) (,v** ...)
+                  `(module ,id ,module-path (,v* ...) (,v** ...) (,stx ...)
                            (,raw-provide-spec ...)
                            (,raw-require-spec ...)
                            (,(for/list ([mlf (in-list module-level-form)])
@@ -1174,8 +902,8 @@
   (ModuleLevelForm : module-level-form (e [env '()] [frame 0] [global-env '()] [prefix-frame 0])
                    -> module-level-form ())
   (CompilationTop : compilation-top (e) -> compilation-top ()
-                  [(program (,binding ...) ,top-level-form)
-                   `(program (,binding ...)
+                  [(program (,binding ...) (,stx ...) ,top-level-form)
+                   `(program (,binding ...) (,stx ...)
                              ,(TopLevelForm top-level-form '() 0 (make-global-env binding) 0))]))
 
 (define-pass find-let-depth : Ldebruijn (e) -> Lfindletdepth ()
@@ -1243,14 +971,15 @@
                  (values `(define-syntaxes* (,v ...) ,expr) depth)])
   (ModuleLevelForm : module-level-form (e) -> module-level-form (0))
   (SubmoduleForm : submodule-form (e) -> submodule-form (0)
-                 [(module ,id ,module-path (,v* ...) (,v** ...)
+                 [(module ,id ,module-path (,v* ...) (,v** ...) (,stx ...)
                           (,[raw-provide-spec] ...)
                           (,[raw-require-spec] ...)
                           (,[module-level-form depth] ...)
                           (,[syntax-level-form] ...)
                           (,[submodule-form** depth**] ...)
                           (,[submodule-form* depth*] ...))
-                  (values `(module ,id ,module-path (,v* ...) (,v** ...) ,(apply max 0 depth)
+                  (values `(module ,id ,module-path (,v* ...) (,v** ...) (,stx ...)
+                             ,(apply max 0 depth)
                                    (,raw-provide-spec ...)
                                    (,raw-require-spec ...)
                                    (,module-level-form ...)
@@ -1262,167 +991,6 @@
                        [(define-values (,eni ...) ,[expr depth])
                         (values `(define-values (,eni ...) ,expr) depth)])
   (CompilationTop : compilation-top (e) -> compilation-top ()
-                  [(program (,binding ...) ,[top-level-form depth])
-                   `(program ,depth (,binding ...) ,top-level-form)]))
+                  [(program (,binding ...) (,stx ...) ,[top-level-form depth])
+                   `(program ,depth (,binding ...) (,stx ...) ,top-level-form)]))
 
-(define tmp-prefix
-  (zo:prefix 0 '() '() 'missing))
-
-(define-pass generate-zo-structs : Lfindletdepth (e) -> * ()
-  (definitions
-    (define zo-void
-      (zo:primval 35)))
-  (CompilationTop : compilation-top (e) -> * ()
-                  [(program ,eni (,binding ...) ,top-level-form)
-                   (zo:compilation-top eni
-                                       (hash)
-                                       (zo:prefix
-                                        0
-                                        (map (lambda (x) (and x (variable-name x))) binding)
-                                        '()
-                                        'missing)
-                                       (TopLevelForm top-level-form))])
-  (TopLevelForm : top-level-form (e) -> * ()
-                [(#%expression ,expr)
-                 (Expr expr)]
-                [(begin* ,top-level-form ...)
-                 (zo:splice (map TopLevelForm top-level-form))]
-                [(#%require ,raw-require-spec ...)
-                 (void)]
-                [(begin-for-syntax* ,top-level-form ...)
-                 (void)]
-                [(define-syntaxes* (,v ...) ,expr)
-                 (void)])
-  (ModuleLevelForm : module-level-form (e) -> * ()
-                   [(#%declare ,declaration-keyword ...)
-                    (void)])
-  (SubmoduleForm : submodule-form (e) -> * ()
-                 [(module ,id ,module-path (,v* ...) (,v** ...) ,eni
-                          (,raw-provide-spec ...)
-                          (,raw-require-spec ...)
-                          (,module-level-form ...)
-                          (,syntax-level-form ...)
-                          (,submodule-form ...)
-                          (,submodule-form* ...))
-                  (zo:mod id
-                          id
-                          (module-path-index-join #f #f #f)
-                          (zo:prefix 0 (map variable-name v*) '() 'missing)
-                          (map RawProvideSpec raw-provide-spec)
-                          (map RawRequireSpec raw-require-spec)
-                          (map ModuleLevelForm module-level-form)
-                          '()
-                          '()
-                          eni
-                          (zo:toplevel 0 0 #f #f)
-                          #f
-                          #f
-                          (hash)
-                          '()
-                          (map SubmoduleForm submodule-form)
-                          (map SubmoduleForm submodule-form*))])
-  (GeneralTopLevelForm : general-top-level-form (e) -> * ()
-                       [(define-values (,eni ...) ,expr)
-                        (zo:def-values (for/list ([i (in-list eni)])
-                                         (zo:toplevel 0 i #f #f))
-                                       (Expr expr))])
-  (Bidnding : binding (e) -> * ()
-            [,false false]
-            [,v v]
-            [,eni eni]
-            [(primitive ,eni)
-             (zo:primval eni)])
-  (Expr : expr (e) -> * ()
-        [,eni (zo:localref #f eni #f #f #f)]
-        [(closure ,v ,lambda) (zo:closure (Lambda lambda) (variable-name v))]
-        [(primitive ,eni)
-         (zo:primval eni)]
-        [,stx-obj stx-obj]
-        [(#%top ,eni1 ,eni2) (zo:toplevel eni1 eni2 #f #f)]
-        [(#%unbox ,eni)
-         (zo:localref #t eni #f #f #f)]
-        [(#%box ,eni)
-         (zo:boxenv eni zo-void)]
-        [(begin
-           (set!-values ,eni1 ,eni2 (#%box ,eni3))
-           ,expr)
-         (guard (and (= eni2 eni3) (= eni1 1)))
-         (zo:boxenv eni2 (Expr expr))]
-        [(begin
-           (set!-boxes ,eni1 ,eni2 ,expr)
-           ,expr*)
-         (zo:install-value eni1 eni2 #t (Expr expr) (Expr expr*))]
-        [(set!-values ,eni1 ,eni2 ,expr)
-         (zo:install-value eni1 eni2 #f (Expr expr) zo-void)]
-        [(set!-boxes ,eni1 ,eni2 ,expr)
-         (zo:install-value eni1 eni2 #t (Expr expr) zo-void)]
-        [(set!-global ,eni1 ,eni2 ,expr)
-         (zo:assign (zo:toplevel eni1 eni2 #f #f) (Expr expr) #f)]
-        [(letrec (,lambda ...) ,expr)
-         (zo:let-rec (map Lambda lambda) (Expr expr))]
-        [(let-one ,expr1 ,expr)
-         (zo:let-one (Expr expr1) (Expr expr) #f #f)]
-        [(let-void ,eni ,expr)
-         (zo:let-void eni #f (Expr expr))]
-        [(case-lambda ,lambda ...)
-         (zo:case-lam #() (map Lambda lambda))]
-        [(if ,expr1 ,expr2 ,expr3)
-         (zo:branch (Expr expr1) (Expr expr2) (Expr expr3))]
-        [(begin ,expr* ... ,expr)
-         (zo:seq (append (map Expr expr*)
-                         (list (Expr expr))))]
-        [(begin0 ,expr ,expr* ...)
-         (zo:beg0 (cons (Expr expr) (map Expr expr*)))]
-        [(quote ,datum) datum]
-        [(with-continuation-mark ,expr1 ,expr2 ,expr3)
-         (zo:with-cont-mark (Expr expr1) (Expr expr2) (Expr expr3))]
-        [(#%plain-app ,expr ,expr* ...)
-         (zo:application (Expr expr) (map Expr expr*))]
-        [(#%variable-reference-top ,eni)
-         (zo:varref (zo:toplevel 0 0 #f #f) (zo:toplevel 0 0 #f #f))]
-        [(#%variable-reference ,eni)
-         (zo:varref (zo:toplevel 0 0 #f #f) (zo:toplevel 0 0 #f #f))]
-        [(#%variable-reference-none ,eni1 ,eni2)
-         (zo:varref (zo:toplevel eni1 eni2 #f #f) (zo:toplevel eni1 eni2 #f #f))])
-  (Lambda : lambda (e) -> * ()
-          [(#%plain-lambda ,eni ,boolean (,binding2 ...) (,binding3 ...) ,eni4 ,expr)
-           (zo:lam (gensym)
-                   null
-                   (if boolean (- eni 1) eni)
-                   (for/list ([i (in-range (if boolean (- eni 1) eni))])
-                     'val)
-                   boolean
-                   (list->vector binding2)
-                   (map (lambda (x) 'val/ref) binding2)
-                   (if (null? binding3) #f (list->set binding3))
-                   eni4
-                   (Expr expr))])
-  (RawProvideSpec : raw-provide-spec (e) -> * ()
-                  [(for-meta* ,phase-level ,phaseless-prov-spec ...)
-                   (void)])
-  (PhaselessProvSpec : phaseless-prov-spec (e) -> * ()
-                     [,v (void)]
-                     [(rename* ,v1 ,v2)
-                      (void)]
-                     [(protect ,v)
-                      (void)]
-                     [(protect-rename* ,v1 ,v2)
-                      (void)])
-  (RawRequireSpec : raw-require-spec (e) -> * ()
-                  [(for-meta ,phase-level ,phaseless-req-spec ...)
-                   (void)])
-  (PhaselessReqSpec : phaseless-req-spec (e) -> * ()
-                    [(rename ,raw-module-path ,v1 ,v2)
-                     (void)])
-  (RawModulePath : raw-module-path (e) -> * ()
-                 [(submod ,raw-root-module-path ,id ...)
-                  (void)])
-  (RawRootModulePath : raw-root-module-path (e) -> * ()
-                     [,id (void)]
-                     [,string (void)]
-                     [(quote* ,id) (void)]
-                     [(lib ,string ...) (void)]
-                     [(file ,string) (void)]
-                     [(planet ,string1
-                              (,string2 ,string3 ,string* ...))
-                      (void)]                     [,path (void)]))

@@ -8,7 +8,8 @@
          racket/port
          rackunit
          compiler/zo-parse
-         syntax/toplevel)
+         syntax/toplevel
+         syntax/strip-context)
 
 (require/expose compiler/decompile (primitive-table))
 
@@ -110,37 +111,6 @@
                       #:outer-pending [outer-pending (current-outer-pending-default-fuel)])
   (operand exp env effort-counter value residualized-for-effect? size inner-pending? outer-pending))
 
-; Determine if this primitive is one that is effect free
-;   eg, cons, list, cdr, etc.
-; Symbol -> Boolean
-(define (effect-free? primitive)
-  (define effect-free-set
-    (set 'void))
-  (cond
-    [(set-member? effect-free-set primitive) #t]
-    [(foldable? primitive) #t]
-    [else #f]))
-
-; Determins if this primitive is one that will always return true
-;  eg. list, cons
-; Symbol -> Boolean
-(define (return-true? primitive)
-  (define return-true-set
-    (set 'cons 'list 'random))
-  (cond [(set-member? return-true-set primitive) #t]
-        [else #f]))
-
-; Determine if this primitive is foldable
-;   eg +, -, etc.
-; Symbol -> Boolean
-(define (foldable? primitive)
-  (define foldable-set
-    (set '+ '- '* '/ '= '< '> '<= '>= 'exp 'expt 'sqrt 'symbol->string 'string->symbol
-         'string-append 'append 'cons 'car 'cdr 'list-ref 'length 'eq?))
-  (cond
-    [(set-member? foldable-set primitive) #t]
-    [else #f]))
-
 ; Grabs set of identifiers out of formals non-terminal in a language
 ; lang formals -> (listof identifiers)
 (define-syntax-rule (formals->identifiers lang fmls)
@@ -177,6 +147,14 @@
 ; Syntax -> ZO
 (define (syntax->zo stx)
   (compiled-expression->zo (compile-syntax (expand-syntax-top-level-with-compile-time-evals stx))))
+
+(define (toplevel-syntax->zo stx)
+  (parameterize ([current-namespace (make-base-namespace)])
+    (namespace-require 'racket/undefined)
+    (map compiled-expression->zo
+         (eval-compile-time-part-of-top-level/compile
+           (expand-syntax-top-level-with-compile-time-evals
+             (namespace-syntax-introduce (strip-context stx)))))))
 
 
 ;; Taken from Typed Racket

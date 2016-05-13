@@ -47,6 +47,37 @@
                                                                  (current-inline-effort-limit))))
 (current-outer-pending-default-fuel 10)
 
+; Determine if this primitive is one that is effect free
+;   eg, cons, list, cdr, etc.
+; Symbol -> Boolean
+(define (effect-free? primitive)
+  (define effect-free-set
+    (set 'void))
+  (cond
+    [(set-member? effect-free-set primitive) #t]
+    [(foldable? primitive) #t]
+    [else #f]))
+
+; Determins if this primitive is one that will always return true
+;  eg. list, cons
+; Symbol -> Boolean
+(define (return-true? primitive)
+  (define return-true-set
+    (set 'cons 'list 'random))
+  (cond [(set-member? return-true-set primitive) #t]
+        [else #f]))
+
+; Determine if this primitive is foldable
+;   eg +, -, etc.
+; Symbol -> Boolean
+(define (foldable? primitive)
+  (define foldable-set
+    (set '+ '- '* '/ '= '< '> '<= '>= 'exp 'expt 'sqrt 'symbol->string 'string->symbol
+         'string-append 'append 'cons 'car 'cdr 'list-ref 'length 'eq?))
+  (cond
+    [(set-member? foldable-set primitive) #t]
+    [else #f]))
+
 ; Converts formals to use the new environment
 ; Environment Formals-Expr -> Formals-Expr
 (define (convert-formals env fmls)

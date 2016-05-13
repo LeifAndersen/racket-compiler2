@@ -8,8 +8,10 @@
          (rename-in racket/base
                     [compile base:compile])
          "languages.rkt"
+         "parser.rkt"
          "passes.rkt"
          "optimizer.rkt"
+         "generator.rkt"
          "utils.rkt"
          "components.rkt")
 
@@ -59,10 +61,3 @@
   (zo-marshal generate-bytecode)
   bytes->compiled-expression)
 
-
-; TODO, this needs to work
-#;
-(define code
-  #'(syntax->datum #'(+ 1 2)))
-
-;(compile/18 code)

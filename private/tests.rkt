@@ -990,6 +990,7 @@
        (current-compile #'(syntax->datum #'(+ 1 2)))
        `(program ()
                  (,#'(+ 1 2))
+                 (0)
                  (#%plain-app (primitive syntax->datum) (quote-syntax 0))))
       (check-compiler-equal?
        (current-compile #'(let ([x (quote-syntax (+ 1 2))])
@@ -997,6 +998,7 @@
                               (list (syntax->datum x) (syntax->datum y)))))
        `(program ()
                  (,#'(+ 1 2) ,#'(+ 3 4))
+                 (0 1)
                  (let ([,x (quote-syntax 0)])
                    (let ([,y (quote-syntax 1)])
                      (#%plain-app (primitive list)
@@ -1017,33 +1019,35 @@
     (define-compiler-test Ldebruijn compilation-top
       (check-compiler-equal?
        (current-compile #'(lambda (x) x))
-       `(program () (#%expression (#%plain-lambda 1 #f () () 0))))
+       `(program () () (#%expression (#%plain-lambda 1 #f () () 0))))
       (check-compiler-equal?
        (current-compile #'(let ([x 5])
                        (lambda (y . z) x)))
-       `(program () (#%plain-lambda 2 #t () () '5)))
+       `(program () () (#%plain-lambda 2 #t () () '5)))
       (check-compiler-equal?
        (current-compile #'(let ([x 5]
                            [y 6])
                        (+ x y)))
-       `(program () '11))
+       `(program () () '11))
       (check-compiler-equal?
        (current-compile #'(begin
-                       (define x 5)
+                            (define x 5)
                        (+ x 5)))
-       `(program (,x*) (begin*
-                       (define-values (0) '5)
-                       (#%plain-app (primitive ,(dict-ref primitive-table* '+)) (#%top 2 0) '5))))
+       `(program (,x*) ()
+                 (begin*
+                   (define-values (0) '5)
+                   (#%plain-app (primitive ,(dict-ref primitive-table* '+)) (#%top 2 0) '5))))
       (check-compiler-equal?
        (current-compile #'(begin
                             (define x 5)
                             (lambda (y)
                               y x)))
-       `(program (,x*) (begin*
-                         (define-values (0) '5)
-                         (#%expression
-                          (#%plain-lambda 1 #f (0) (0)
-                                          (#%top 0 0))))))
+       `(program (,x*) ()
+                 (begin*
+                   (define-values (0) '5)
+                   (#%expression
+                    (#%plain-lambda 1 #f (0) (0)
+                                    (#%top 0 0))))))
       ;; TODO
       #;(check-equal?
        (current-compile #'(begin
@@ -1070,11 +1074,12 @@
     (define-compiler-test Lfindletdepth compilation-top
       (check-compiler-equal?
        (current-compile #'(lambda (x) (let ([y 5]) (+ x y))))
-       `(program 1 () (#%expression
-                       (#%plain-lambda 1 #f () () 9
-                                       (#%plain-app
-                                        (primitive ,(dict-ref primitive-table* '+))
-                                        2 '5)))))
+       `(program 1 () ()
+                 (#%expression
+                  (#%plain-lambda 1 #f () () 9
+                                  (#%plain-app
+                                   (primitive ,(dict-ref primitive-table* '+))
+                                   2 '5)))))
       (check-compiler-equal?
        (current-compile #'(if (= 5 6)
                               (let ([x '5]
@@ -1082,7 +1087,7 @@
                                 y)
                               (let ([x '6])
                                 x)))
-       `(program 0 () '6))))
+       `(program 0 () () '6))))
 
 (module+ test
   (parameterize ([current-environment-variables
@@ -1160,7 +1165,7 @@
                                   (let ([x 6])
                                     (#%top . x))))
              (compile-compare #'(call-with-current-continuation (lambda (x) 12)))
-             ;; TODO, this test (compile-compare #'(syntax->datum #'(+ 1 2)))
+             (compile-compare #'(syntax->datum #'(+ 1 2)))
              ;; TODO, this test
              #;(compile-compare #'(begin
                                   (module foo racket
