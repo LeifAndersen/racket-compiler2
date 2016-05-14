@@ -32,20 +32,28 @@
          "languages.rkt"
          "utils.rkt")
 
-(define tmp-prefix
-  (zo:prefix 0 '() '() 'missing))
+(define (variable->zo-variable v)
+  (define binding (variable-binding v))
+  (cond [(module-binding? binding)
+         (zo:module-variable (module-binding-source-mod binding)
+                             (variable-name v)
+                             -1
+                             (module-binding-nominal-export-phase binding)
+                             #f)]
+        [else
+         (variable-name v)]))
+
+(define zo-void
+  (zo:primval 35))
 
 (define-pass generate-zo-structs : Lfindletdepth (e) -> * ()
-  (definitions
-    (define zo-void
-      (zo:primval 35)))
   (CompilationTop : compilation-top (e) -> * ()
                   [(program ,eni (,binding ...) (,stx ...) ,top-level-form)
                    (zo:compilation-top eni
                                        (hash)
                                        (zo:prefix
                                         0
-                                        (map (lambda (x) (and x (variable-name x))) binding)
+                                        (map (lambda (x) (and x (variable->zo-variable x))) binding)
                                         stx
                                         'missing)
                                        (TopLevelForm top-level-form))])

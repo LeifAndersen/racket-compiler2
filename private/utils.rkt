@@ -112,7 +112,11 @@
                                 nominal-source-id
                                 source-phase
                                 import-phase
-                                nominal-export-phase))
+                                nominal-export-phase)
+  #:mutable
+  #:methods gen:custom-write
+  [(define (write-proc data port mode)
+     ((current-module-binding-printer) data port mode))])
 (define (make-module-binding source-mod
                              source-id
                              nominal-source-mod
@@ -133,6 +137,23 @@
                   source-phase
                   import-phase
                   nominal-export-phase))
+
+(define current-module-binding-printer
+  (make-parameter (current-binding-printer)))
+
+(define module-binding-printer
+  (make-constructor-style-printer
+   (lambda (obj) 'module-binding)
+   (lambda (obj) (list (binding-properties obj)
+                       (binding-assigned? obj)
+                       (binding-referenced? obj)
+                       (module-binding-source-mod obj)
+                       (module-binding-source-id obj)
+                       (module-binding-nominal-source-mod obj)
+                       (module-binding-nominal-source-id obj)
+                       (module-binding-source-phase obj)
+                       (module-binding-import-phase obj)
+                       (module-binding-nominal-export-phase obj)))))
 
 
 (define current-outer-pending-default-fuel (make-parameter 1))

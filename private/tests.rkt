@@ -1219,8 +1219,7 @@
              (compile-compare #'(call-with-current-continuation (lambda (x) 12)))
              (compile-compare #'(syntax->datum #'(+ 1 2)))
              (compile-compare #'(eval #'(+ 1 2)))
-             ;; TODO, this test
-             #;(compile-compare #'(parameterize ([current-namespace (make-base-namespace)])
+             (compile-compare #'(parameterize ([current-namespace (make-base-namespace)])
                                   (eval '(+ 1 2))))
              #;(compile-compare #'(begin
                                   (module foo racket
