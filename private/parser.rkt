@@ -4,32 +4,38 @@
 
 (require nanopass/base
          syntax/parse
+         syntax/id-table
          racket/match
          racket/dict
          racket/function
          "languages.rkt"
          "utils.rkt")
 
-(define current-global-env (make-parameter (make-hash)))
+(define current-global-env (make-parameter (make-free-id-table)))
 
 ; Initial environment for local variables
-(define initial-env (hash))
+(define initial-env (make-immutable-free-id-table))
 (define (extend-env env vars)
   (for/fold ([acc env])
             ([var (in-list vars)])
-    (define var* (syntax->datum var))
-    (dict-set acc var* (make-variable var*
-                                          #:source-location (syntax-source var)))))
-(define ((lookup-env env) var)
-  (define var* (syntax->datum var))
-  (dict-ref env var*
-            (lambda ()
-              (dict-ref (current-global-env) var*
-                        (lambda ()
-                          (let ([x (make-variable var*
-                                                  #:source-location (syntax-source var))])
-                            (dict-set! (current-global-env) var* x)
-                            x))))))
+    (dict-set acc var (make-variable (syntax->datum var)
+                                      #:source-location (syntax-source var)))))
+
+(define ((lookup-env env) var #:binding [binding (make-binding)])
+  (define old-var
+    (dict-ref env var
+              (lambda ()
+                (dict-ref (current-global-env) var #f))))
+  (cond [old-var
+         (struct-copy variable old-var
+                      [name (syntax->datum var)]
+                      [srcloc (syntax-source var)])]
+        [else
+         (define x (make-variable (syntax->datum var)
+                                  #:source-location (syntax-source var)
+                                  #:binding binding))
+         (dict-set! (current-global-env) var x)
+         x]))
 
 ;; Parse and alpha-rename expanded program
 (define-pass parse-and-rename : * (form) -> Lsrc ()
@@ -40,7 +46,7 @@
                 `(#%expression ,(parse-expr #'body env))]
                [(module id:id path
                   (#%plain-module-begin body ...))
-                (parameterize ([current-global-env (make-hash)])
+                (parameterize ([current-global-env (make-free-id-table)])
                   `(module ,(syntax->datum #'id) ,(syntax->datum #'path)
                      (,(for/list ([i (in-list (syntax->list #'(body ...)))])
                          (parse-mod i env)) ...)))]
@@ -67,13 +73,13 @@
                 `(#%declare ,(syntax->list #'(keyword ...)) ...)]
                [(module id:id path
                   (#%plain-module-begin body ...))
-                (parameterize ([current-global-env (make-hash)])
+                (parameterize ([current-global-env (make-free-id-table)])
                   `(submodule ,(syntax->datum #'id) ,(syntax->datum #'path)
                               (,(for/list ([i (in-list (syntax->list #'(body ...)))])
                                   (parse-mod i env)) ...)))]
                [(module* id:id path
                   (#%plain-module-begin body ...))
-                (parameterize ([current-global-env (make-hash)])
+                (parameterize ([current-global-env (make-free-id-table)])
                   `(submodule* ,(syntax->datum #'id) ,(syntax->datum #'path)
                                (,(for/list ([i (in-list (syntax->list #'(body ...)))])
                                    (parse-mod i env)) ...)))]
@@ -104,9 +110,18 @@
                 #:literals (#%plain-lambda case-lambda if begin begin0 let-values letrec-values set!
                                            quote quote-syntax with-continuation-mark #%plain-app
                                            #%top #%variable-reference)
-                [id:id (if (primitive-identifier? #'id)
-                           `(primitive ,(primitive->symbol #'id))
-                           ((lookup-env env) #'id))]
+                [id:id (cond [(primitive-identifier? #'id)
+                              `(primitive ,(primitive->symbol #'id))]
+                             [else
+                              (match (identifier-binding #'id)
+                                ;; HORRIBLE cludge, because identifier-bindings
+                                ;;   returns #f for top level bound variables.
+                                [#f ((lookup-env (make-free-id-table)) #'id)]
+                                ['lexical ((lookup-env env) #'id)]
+                                [`(,mp ,s ,mp* ,s* ,eni ,ei ,ei*)
+                                 ((lookup-env env)
+                                  #'id #:binding (make-module-binding mp s mp* s* eni ei ei*))])])]
+                
                 [(#%plain-lambda formals body* ... body)
                  (define-values (formals* env*) (parse-formals #'formals env))
                  `(#%plain-lambda ,formals*
@@ -182,7 +197,7 @@
                                ,(for/list ([i (in-list (syntax->list #'(body ...)))])
                                   (parse-expr i env)) ...)]
                 [(#%top . id:id)
-                 `(#%top . ,(parse-expr #'id (hash)))]
+                 `(#%top . ,(parse-expr #'id (make-immutable-free-id-table)))]
                 [(#%variable-reference id:id)
                  `(#%variable-reference ,(parse-expr #'id env))]
                 [(#%variable-reference (#%top . id:id))

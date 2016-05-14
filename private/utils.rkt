@@ -53,33 +53,29 @@
                   operand
                   srcloc
                   binding
-                  properties
-                  assigned?
-                  referenced?)
+                  properties)
   #:mutable
   #:methods gen:custom-write
   [(define (write-proc data port mode)
      ((current-variable-printer) data port mode))]
   #:methods gen:equal+hash
   [(define (equal-proc a b t) (eq? (variable-binding a) (variable-binding b)))
-   (define (hash-proc v t) (eq-hash-code v))
-   (define (hash2-proc v t) (eq-hash-code v))])
+   (define (hash-proc v t) (eq-hash-code (variable-binding v)))
+   (define (hash2-proc v t) (eq-hash-code (variable-binding v)))])
 (define (make-variable name
                        #:operand [operand #f]
                        #:properties [properties (make-hash)]
                        #:source-location [srcloc #f]
-                       #:binding [binding (make-binding)]
-                       #:assigned? [assigned #f]
-                       #:referenced? [ref #f])
-  (variable name operand srcloc binding properties assigned ref))
+                       #:binding [binding (make-binding)])
+  (variable name operand srcloc binding properties))
+
 (define debug-variable-printer
   (make-constructor-style-printer
    (lambda (obj) 'variable)
    (lambda (obj) (list (variable-name obj)
                        (variable-operand obj)
                        (variable-properties obj)
-                       (variable-assigned? obj)
-                       (variable-referenced? obj)))))
+                       (variable-binding obj)))))
 
 (define current-variable-printer
   (make-parameter
@@ -88,9 +84,56 @@
     (lambda (obj) (list (variable-name obj))))))
 
 ; Binding object, ensures that two variables are equal.
-(struct binding (properties))
-(define (make-binding #:properties [properties (make-hash)])
-  (binding properties))
+(struct binding (properties
+                 assigned?
+                 referenced?)
+  #:mutable
+  #:methods gen:custom-write
+  [(define (write-proc data port mode)
+     ((current-binding-printer) data port mode))])
+(define (make-binding #:properties [properties (make-hash)]
+                      #:assigned? [assigned? #f]
+                      #:referenced? [referenced? #f])
+  (binding properties assigned? referenced?))
+
+(define current-binding-printer
+  (make-parameter
+   (make-constructor-style-printer
+    (lambda (obj) 'binding)
+    (lambda (obj) (list (binding-properties obj)
+                        (binding-assigned? obj)
+                        (binding-referenced? obj))))))
+
+; Extenion of binding, stores module level information
+; Similar to results returned from `identifier-binding` function
+(struct module-binding binding (source-mod
+                                source-id
+                                nominal-source-mod
+                                nominal-source-id
+                                source-phase
+                                import-phase
+                                nominal-export-phase))
+(define (make-module-binding source-mod
+                             source-id
+                             nominal-source-mod
+                             nominal-source-id
+                             source-phase
+                             import-phase
+                             nominal-export-phase
+                             #:properties [properties (make-hash)]
+                             #:assigned? [assigned? #f]
+                             #:referenced? [referenced? #f])
+  (module-binding properties
+                  assigned?
+                  referenced?
+                  source-mod
+                  source-id
+                  nominal-source-mod
+                  nominal-source-id
+                  source-phase
+                  import-phase
+                  nominal-export-phase))
+
 
 (define current-outer-pending-default-fuel (make-parameter 1))
 
@@ -180,5 +223,3 @@
 
 (define orig-insp (variable-reference->module-declaration-inspector
                    (#%variable-reference)))
-
-

@@ -279,7 +279,7 @@
 ;; Also marks variables as being referenced.
 (define-pass make-begin-explicit : Lscrubreqprov (e) -> Lbeginexplicit ()
   (Expr : expr (e) -> expr ()
-        [,v (set-variable-referenced?! v #t) v]
+        [,v (set-binding-referenced?! (variable-binding v) #t) v]
         [(#%plain-lambda ,[formals] ,[expr*] ... ,[expr])
          (if (= (length expr*) 0)
              `(#%plain-lambda ,formals ,expr)
@@ -323,20 +323,25 @@
                    (set-remove assigned* (formals->identifiers* formals)))])
   (Expr : expr (e) -> expr ('())
         [(set! ,v ,[expr assigned*])
-         (set-variable-assigned?! v #t)
+         (set-binding-assigned?! (variable-binding v) #t)
          (values `(set! ,v ,expr)
                  (set-add assigned* v))]
-        [(let-values ([(,v ...) ,[expr assigned]] ...) ,[expr* assigned*])
+        [(let-values ([(,v ...) ,[expr assigned]] ...)
+           ,[expr* assigned*])
          (values `(let-values ([(,v ...) ,expr] ...)
                     (assigned (,(set-intersect assigned* (apply set-union '() v)) ...) ,expr*))
                  (apply set-union '() (set-remove assigned* v) assigned))]
-        [(letrec-values ([(,v ...) ,[expr assigned]] ...) ,[expr* assigned*])
+        [(letrec-values ([(,v ...) ,[expr assigned]] ...)
+           ,[expr* assigned*])
          (values `(letrec-values ([(,v ...) ,expr] ...)
                     (assigned (,(set-intersect assigned* (apply set-union '() v)) ...) ,expr*))
                  (apply set-union '() (set-remove assigned* v) assigned))]
         ;; Really *should* be generated
         [(if ,[expr1 assigned1] ,[expr2 assigned2] ,[expr3 assigned3])
          (values `(if ,expr1 ,expr2 ,expr3)
+                 (set-union assigned1 assigned2 assigned3))]
+        [(with-continuation-mark ,[expr1 assigned1] ,[expr2 assigned2] ,[expr3 assigned3])
+         (values `(with-continuation-mark ,expr1 ,expr2 ,expr3)
                  (set-union assigned1 assigned2 assigned3))]
         [(begin ,[expr* assigned*] ... ,[expr assigned])
          (values `(begin ,expr* ... ,expr)

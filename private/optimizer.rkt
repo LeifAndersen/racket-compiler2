@@ -188,14 +188,14 @@
                       [else body])]
                    [else
                     (for ([var (in-list vars)])
-                      (when (and (variable-assigned? var)
-                                 (not (variable-referenced? var)))
+                      (when (and (binding-assigned? (variable-binding var))
+                                 (not (binding-referenced? (variable-binding var))))
                         (set-operand-residualized-for-effect?! var #t)))
                     (define visited-vars
                       (for/list ([(i j) (in-dict var-map)]
-                                 #:when (and (or (variable-referenced? i)
-                                                 (variable-assigned? i))))
-                        (if (variable-referenced? i)
+                                 #:when (and (or (binding-referenced? (variable-binding i))
+                                                 (binding-assigned? (variable-binding i)))))
+                        (if (binding-referenced? (variable-binding i))
                             (cons i (score-value-visit-operand! j size-counter))
                             (cons i `(primitive void)))))
                     ;(printf "make-let2:~n visited-vars: ~a~n~n" visited-vars)
@@ -239,8 +239,9 @@
       [_
        (define v* ((env-lookup env) v))
        (define opnd (variable-operand v*))
-       ;(printf "inline-ref:~n v*: ~a~n ctxt: ~a~n opnd: ~a~n opnd-exp: ~a~n opnd-inner-pend: ~a~n~n"
-       ;        v* context opnd (and opnd (operand-exp opnd))
+       ;(printf (string-append "inline-ref:~n v: ~a~n v*: ~a~n ctxt: ~a~n env: ~a~n "
+       ;                       "opnd: ~a~n opnd-exp: ~a~n opnd-inner-pend: ~a~n~n")
+       ;        v v* context env opnd (and opnd (operand-exp opnd))
        ;        (and opnd (operand-inner-pending? opnd)))
        (cond
          [(and opnd (not (operand-inner-pending? opnd)))
@@ -249,7 +250,7 @@
            (lambda () (value-visit-operand! opnd))
            (lambda () (set-operand-inner-pending?! opnd #f)))
           (cond
-            [(variable-assigned? v) (residualize-ref v* size-counter)]
+            [(binding-assigned? (variable-binding v)) (residualize-ref v* size-counter)]
             [else
              (define rhs (result-expr (operand-value opnd)))
              ;(printf "inline-ref2:~n v*: ~a~n ctx: ~a~n rhs: ~a~n~n" v* context rhs)
@@ -257,7 +258,7 @@
                             [(quote ,datum) rhs]
                             [,v**
                              (cond
-                               [(variable-assigned? v**) (residualize-ref v* size-counter)]
+                               [(binding-assigned? (variable-binding v**)) (residualize-ref v* size-counter)]
                                [else
                                 (define v-opnd (variable-operand v))
                                 (if (and v-opnd (operand-value v-opnd))
@@ -351,7 +352,7 @@
 ;; Ref -> Ref
 (define (residualize-ref v size-counter)
   (decrement! size-counter 1)
-  (set-variable-referenced?! v #t)
+  (set-binding-referenced?! (variable-binding v) #t)
   v)
 
 ;; Inlines a call, keeping around operands only when needed
@@ -530,9 +531,9 @@
         [(set!-values (,v ...) ,expr)
          (define v* (map (env-lookup env) v))
          (cond
-           [(ormap variable-referenced? v)
+           [(ormap binding-referenced? (map variable-binding v))
             (define expr* (inline-expressions expr 'value env effort-counter size-counter))
-            (map (curryr set-variable-assigned?! #t) v*)
+            (map (curryr set-binding-assigned?! #t) (map variable-binding v*))
             `(set!-values (,v* ...) ,expr*)]
            [else
             (make-begin
@@ -588,7 +589,7 @@
          (define filtered-vars
            (for/list ([i (in-list v*)]
                       [j (in-list operands)]
-                      #:when (variable-referenced? i))
+                      #:when (binding-referenced? (variable-binding i)))
              (cons i j)))
          ;(printf "inline-expressions-letrec-2:~n expr: ~a~n expr*: ~a~n filtered-vars: ~a~n~n"
          ;        expr expr* filtered-vars)

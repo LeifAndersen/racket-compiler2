@@ -213,7 +213,7 @@
                                             [(begin* (define-values (,var1) ,expr)
                                                      ,var2)
                                              (values var1 var2)])])
-        (check-true (eq? v1 v2)))
+        (check-true (equal? v1 v2)))
      (check-compiler-equal?
       (current-compile #`(eval #'(+ 1 2)))
       `(#%plain-app (primitive eval) (quote-syntax ,#'(+ 1 2))))
@@ -1218,7 +1218,10 @@
                                     (#%top . x))))
              (compile-compare #'(call-with-current-continuation (lambda (x) 12)))
              (compile-compare #'(syntax->datum #'(+ 1 2)))
+             (compile-compare #'(eval #'(+ 1 2)))
              ;; TODO, this test
+             #;(compile-compare #'(parameterize ([current-namespace (make-base-namespace)])
+                                  (eval '(+ 1 2))))
              #;(compile-compare #'(begin
                                   (module foo racket
                                     (#%plain-module-begin
