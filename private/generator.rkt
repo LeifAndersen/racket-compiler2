@@ -16,6 +16,7 @@
          racket/stxparam-exptime
          racket/block
          racket/splicing
+         syntax/modresolve
          compiler/zo-marshal
          syntax/toplevel
          syntax/strip-context
@@ -36,12 +37,37 @@
   (define binding (variable-binding v))
   (cond [(module-binding? binding)
          (zo:module-variable (module-binding-source-mod binding)
-                             (variable-name v)
-                             -1
-                             (module-binding-nominal-export-phase binding)
+                             (module-binding-source-id binding)
+                             (module-binding->offset (module-binding-source-mod binding)
+                                                     (module-binding-source-id binding)
+                                                     (module-binding-source-phase binding))
+                             (module-binding-source-phase binding)
                              #f)]
         [else
          (variable-name v)]))
+
+; Module-Path Symbol Exact-Nonneagtive-Integer -> Exact-Nonnegative-Integer
+(define (module-binding->offset mod v phase)
+  (parameterize ([current-namespace (make-base-namespace)])
+    (namespace-require 'racket)
+    (define mod* (let ([m (resolve-module-path-index mod (current-directory))])
+                   (if (symbol? m) mod m)))
+    (namespace-require mod*)
+    (define-values (exports transformers)
+      (module->exports mod*))
+    (define indirect-exports (module->indirect-exports mod*))
+    (define exports* (dict-ref exports phase #f))
+    (define transformers* (dict-ref exports phase #f))
+    (define indirect-exports* (dict-ref indirect-exports phase #f))
+    (cond
+      [(dict-has-key? exports* v)
+       (define e (dict-keys exports*))
+       (- (length e) (length (memq v e)))]
+      [(set-member? indirect-exports* v)
+       (define e indirect-exports*)
+       (+ (length (dict-keys exports*))
+          (- (length e) (length (memq v e))))]
+      [else -1])))
 
 (define zo-void
   (zo:primval 35))

@@ -615,9 +615,13 @@
            (displayln globals)
            `(#%plain-lambda (,id ...) ,fbody)])
   (TopLevelForm : top-level-form (e [globals '()]) -> top-level-form ()
-                [,expr (Expr e globals)])
+                [,expr (Expr e globals)]
+                #;[(begin* ,top-level-form ...)
+                 (displayln globals)
+                 `(begin* ,(map (curryr TopLevelForm globals) top-level-form) ...)])
                 #;[(#%expression ,[expr])
                  `(#%expression ,expr)]
+  (GeneralTopLevelForm : general-top-level-form (e [globals '()]) -> top-level-form ())
   (ModuleLevelForm : module-level-form (e [globals '()]) -> module-level-form ())
   (SubmoduleForm : submodule-form (e [globals '()]) -> submodule-form ()
                  [(module ,id ,module-path (,v* ...) (,v** ...)
@@ -812,7 +816,7 @@
     (define ((var->index env frame global-env) id)
       (if (dict-has-key? env id)
           (- frame (lookup-env env id))
-          (error "Variable not bound")))
+          (error 'compiler "Variable not bound ~a" id)))
     ;; Convert a list of identifiers to it's range and offset
     ;; (valid because list ids should be consecutive
     ;; (list symbol) -> (values exact-nonnegative-integer exact-nonnegative-integer)

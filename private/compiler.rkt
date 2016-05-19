@@ -19,6 +19,7 @@
 (define (expand-syntax* stx)
   (parameterize ([current-namespace (make-base-namespace)])
     (namespace-require 'racket/undefined)
+    (namespace-require 'racket)
     (expand-syntax-top-level-with-compile-time-evals
      (namespace-syntax-introduce stx))))
 
@@ -60,3 +61,6 @@
   (generate-zo-structs generate-bytecode)
   (zo-marshal generate-bytecode)
   bytes->compiled-expression)
+
+;(current-variable-printer debug-variable-printer)
+;(current-module-binding-printer module-binding-printer)

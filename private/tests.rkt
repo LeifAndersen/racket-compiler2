@@ -897,6 +897,7 @@
     (define x (make-variable 'x))
     (define y (make-variable 'y))
     (define z (make-variable 'z))
+    (define ccmk (make-variable 'contract-continuation-mark-key))
     (define-compiler-test Lraisetoplevel compilation-top
       (check-compiler-equal?
        (current-compile #'(begin
@@ -945,7 +946,14 @@
                            (begin
                              (set!-global ,x (#%plain-app (primitive +) (#%top . ,x) '1))
                              (set!-boxes (,y) (#%plain-app (primitive +) (#%unbox ,y) '1))
-                             (#%plain-app (primitive +) (#%top . ,x) (#%unbox ,y)))))))))))
+                             (#%plain-app (primitive +) (#%top . ,x) (#%unbox ,y))))))))
+      (check-compiler-equal?
+       (current-compile #'(begin (define x contract-continuation-mark-key)
+                                 x))
+       `(program (,ccmk ,x)
+                 (begin*
+                   (define-values (,x) (#%top . ,ccmk))
+                   (#%top . ,x)))))))
 
 ;; ===================================================================================================
 
@@ -1221,6 +1229,7 @@
              (compile-compare #'(eval #'(+ 1 2)))
              (compile-compare #'(parameterize ([current-namespace (make-base-namespace)])
                                   (eval '(+ 1 2))))
+             (check-equal? (eval (compile #'(dict-ref (hash 1 2) 1))) 2)
              #;(compile-compare #'(begin
                                   (module foo racket
                                     (#%plain-module-begin
