@@ -709,7 +709,7 @@
                         [(x) x]
                         [(x y . z) z]
                         [x x]))
-        `(case-lambda [#%plain-lambda (,'() ...) (assigned () '10)]
+        `(case-lambda [#%plain-lambda () (assigned () '10)]
                       [#%plain-lambda (,x) (assigned () ,x)]
                       [#%plain-lambda (,x ,y . ,z) (assigned () ,z)]
                       [#%plain-lambda ,x (assigned () ,x)]))
