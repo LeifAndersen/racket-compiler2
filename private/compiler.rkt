@@ -1,12 +1,11 @@
 #lang racket/base
 
-(provide (all-defined-out))
+(provide (all-defined-out)
+         compile)
 
 (require racket/port
          compiler/zo-marshal
          syntax/toplevel
-         (rename-in racket/base
-                    [compile base:compile])
          "languages.rkt"
          "parser.rkt"
          "passes.rkt"
@@ -64,3 +63,10 @@
 
 ;(current-variable-printer debug-variable-printer)
 ;(current-module-binding-printer module-binding-printer)
+
+(define code
+ #'(module foo racket
+     (#%plain-module-begin
+      3)))
+
+;(compile/18 code)

@@ -152,10 +152,9 @@
        `(module test racket
           ((begin-for-syntax
              (define-values (,x) '5)))))
-     ;; XXX The ,'() ... should NOT be needed
       (check-compiler-equal?
        (current-compile #'(lambda () 5))
-       `(#%expression (#%plain-lambda (,'() ...) '5)))
+       `(#%expression (#%plain-lambda () '5)))
       (check-compiler-equal?
        (current-compile #'(lambda (a b . c)
                             (apply + a b c)))
@@ -834,11 +833,10 @@
                  (let ([,x '6])
                    (begin
                      (set!-values (,x) (#%box ,x))
-                     ;; The ,'() ... should NOT be needed
-                     (letrec ([,f (#%plain-lambda (,'() ...) (free (,x) () (#%unbox ,x)))])
+                     (letrec ([,f (#%plain-lambda () (free (,x) () (#%unbox ,x)))])
                        (begin
                          (set!-boxes (,x) '7)
-                         (#%plain-app (#%plain-lambda (,'() ...) (free (,x) () (#%unbox ,x)))
+                         (#%plain-app (#%plain-lambda () (free (,x) () (#%unbox ,x)))
                                       ,f)))))))
       (check-compiler-equal?
        (current-compile #'(begin
@@ -982,7 +980,7 @@
                                     [g (lambda () (f))])
                              (f)))
         `(program ()
-                  (letrec ([,f (#%plain-lambda (,'() ...) (free (,f) () (#%plain-app ,f)))])
+                  (letrec ([,f (#%plain-lambda () (free (,f) () (#%plain-app ,f)))])
                     (#%plain-app ,f))))
        (check-compiler-equal?
         (current-compile #'(letrec ([f (lambda (x) x)])
@@ -1230,6 +1228,10 @@
              (compile-compare #'(parameterize ([current-namespace (make-base-namespace)])
                                   (eval '(+ 1 2))))
              (check-equal? (eval (compile #'(dict-ref (hash 1 2) 1))) 2)
+             #;
+             (compile-compare #'(module foo racket
+                                  (#%plain-module-begin
+                                   (+ 1 2))))
              #;(compile-compare #'(begin
                                   (module foo racket
                                     (#%plain-module-begin

@@ -52,7 +52,7 @@
     (namespace-require 'racket)
     (define mod* (let ([m (resolve-module-path-index mod (current-directory))])
                    (if (symbol? m) mod m)))
-    (namespace-require mod*)
+    (dynamic-require mod* (void))
     (define-values (exports transformers)
       (module->exports mod*))
     (define indirect-exports (module->indirect-exports mod*))
