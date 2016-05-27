@@ -896,6 +896,7 @@
     (define y (make-variable 'y))
     (define z (make-variable 'z))
     (define ccmk (make-variable 'contract-continuation-mark-key))
+    (define r (make-variable 'random))
     (define-compiler-test Lraisetoplevel compilation-top
       (check-compiler-equal?
        (current-compile #'(begin
@@ -951,7 +952,16 @@
        `(program (,ccmk ,x)
                  (begin*
                    (define-values (,x) (#%top . ,ccmk))
-                   (#%top . ,x)))))))
+                   (#%top . ,x))))
+      (check-compiler-equal?
+       (current-compile #'(module foo racket
+                            (#%plain-module-begin
+                             (random))))
+       `(program ()
+                 (module foo racket (,r) ()
+                   () ()
+                   ((#%plain-app (#%top . ,r)))
+                   () () ()))))))
 
 ;; ===================================================================================================
 
@@ -1231,7 +1241,7 @@
              (compile-compare #'(module foo racket
                                   (#%plain-module-begin
                                    (+ 1 2))))
-             #;(compile-compare
+             (compile-compare
               #'(begin
                   (module foo racket
                     (#%plain-module-begin

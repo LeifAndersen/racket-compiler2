@@ -66,4 +66,9 @@
 ;(require nanopass/base)
 
 (define code
-  #'(syntax->datum #'(+ 1 2)))
+  ;#'(random)
+  #'(module foo racket
+      (#%plain-module-begin
+       (random))))
+
+;(compile/14 code)
