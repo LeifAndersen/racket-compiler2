@@ -1145,7 +1145,7 @@
                                 y)
                               (let ([x '6])
                                 x)))
-       `(program 0 () () '6))))
+       `(program 1 () () '6))))
 
 (module+ test
   (parameterize ([current-environment-variables
@@ -1228,10 +1228,17 @@
              (compile-compare #'(parameterize ([current-namespace (make-base-namespace)])
                                   (eval '(+ 1 2))))
              (check-equal? (eval (compile #'(dict-ref (hash 1 2) 1))) 2)
-             #;
              (compile-compare #'(module foo racket
                                   (#%plain-module-begin
                                    (+ 1 2))))
+             #;(compile-compare
+              #'(begin
+                  (module foo racket
+                    (#%plain-module-begin
+                     (random)))
+                  (module bar racket
+                    (#%plain-module-begin
+                     (random)))))
              #;(compile-compare #'(begin
                                   (module foo racket
                                     (#%plain-module-begin

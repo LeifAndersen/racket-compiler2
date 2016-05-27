@@ -63,10 +63,7 @@
 
 ;(current-variable-printer debug-variable-printer)
 ;(current-module-binding-printer module-binding-printer)
+;(require nanopass/base)
 
 (define code
- #'(module foo racket
-     (#%plain-module-begin
-      3)))
-
-;(compile/18 code)
+  #'(syntax->datum #'(+ 1 2)))

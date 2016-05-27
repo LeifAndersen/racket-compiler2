@@ -75,14 +75,17 @@
 (define-pass generate-zo-structs : Lfindletdepth (e) -> * ()
   (CompilationTop : compilation-top (e) -> * ()
                   [(program ,eni (,binding ...) (,stx ...) ,top-level-form)
-                   (zo:compilation-top eni
-                                       (hash)
-                                       (zo:prefix
-                                        0
-                                        (map (lambda (x) (and x (variable->zo-variable x))) binding)
-                                        stx
-                                        'missing)
-                                       (TopLevelForm top-level-form))])
+                   (zo:compilation-top
+                    eni
+                    (hash)
+                    (zo:prefix
+                     0
+                     ;; TODO, only need #f if there are modules
+                     (append (map (lambda (x) (and x (variable->zo-variable x))) binding)
+                             (if (null? stx) '(#f) '()))
+                     stx
+                     'missing)
+                    (TopLevelForm top-level-form))])
   (TopLevelForm : top-level-form (e) -> * ()
                 [(#%expression ,expr)
                  (Expr expr)]
@@ -107,17 +110,20 @@
                           (,submodule-form* ...))
                   (zo:mod id
                           id
-                          (module-path-index-join #f #f #f)
-                          (zo:prefix 0 (map variable-name v*) stx 'missing)
+                          (module-path-index-join #f #f)
+                          (zo:prefix 0 (append (map variable-name v*) '(#f)) stx 'missing)
                           (map RawProvideSpec raw-provide-spec)
-                          (map RawRequireSpec raw-require-spec)
+                          (map RawRequireSpec
+                               (cons (with-output-language (Lfindletdepth raw-require-spec)
+                                       `(for-meta 0 ,module-path))
+                                     raw-require-spec))
                           (map ModuleLevelForm module-level-form)
                           '()
                           '()
                           eni
                           (zo:toplevel 0 0 #f #f)
                           #f
-                          #f
+                          #t
                           (hash)
                           '()
                           (map SubmoduleForm submodule-form)
@@ -211,7 +217,7 @@
                       (void)])
   (RawRequireSpec : raw-require-spec (e) -> * ()
                   [(for-meta ,phase-level ,phaseless-req-spec ...)
-                   (void)])
+                   (cons phase-level (map PhaselessReqSpec phaseless-req-spec))])
   (PhaselessReqSpec : phaseless-req-spec (e) -> * ()
                     [(rename ,raw-module-path ,v1 ,v2)
                      (void)])
@@ -219,7 +225,7 @@
                  [(submod ,raw-root-module-path ,id ...)
                   (void)])
   (RawRootModulePath : raw-root-module-path (e) -> * ()
-                     [,id (void)]
+                     [,id (module-path-index-join id #f)]
                      [,string (void)]
                      [(quote* ,id) (void)]
                      [(lib ,string ...) (void)]
