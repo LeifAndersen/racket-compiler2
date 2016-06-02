@@ -65,10 +65,19 @@
 ;(current-module-binding-printer module-binding-printer)
 ;(require nanopass/base)
 
+#;
 (define code
-  ;#'(random)
+  #'(define-syntax defvar
+      (syntax-rules ()
+        [(_ name val)
+         (namespace-variable-value 'name #f
+                                   (lambda () (namespace-set-variable-value! 'name val)))])))
+
+(define code
   #'(module foo racket
       (#%plain-module-begin
-       (random))))
+       random)))
 
-;(compile/14 code)
+;(compile/13 code)
+
+;(compile code)

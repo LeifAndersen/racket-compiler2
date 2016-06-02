@@ -18,8 +18,3 @@
      (if freeze-in-compile?
          (orig prog use)
          (compile prog)))))
-
-#;((current-compile)
- #'(module test racket
-     (#%plain-module-begin   (display (+ 1 2))))
- #f)

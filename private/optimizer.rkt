@@ -370,10 +370,11 @@
                                                       (operand-effort-counter o)
                                                       size-counter))))
          (define operands***
-           (for/list ([o (in-list operands**)]
-                      #:unless (simple? o))
+           (for/list ([ov (in-list operands**)]
+                      [o (in-list operands)]
+                      #:unless (simple? ov))
              (decrement! size-counter (operand-size o))
-             o))
+             ov))
          (if (null? operands***) e (make-begin operands*** e))]))
 
 ;; Performs the actual inlining

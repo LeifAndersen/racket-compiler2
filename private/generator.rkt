@@ -74,18 +74,24 @@
 
 (define-pass generate-zo-structs : Lfindletdepth (e) -> * ()
   (CompilationTop : compilation-top (e) -> * ()
-                  [(program ,eni (,binding ...) (,stx ...) ,top-level-form)
+                  [(program ,prefix-form ,top-level-form)
+                   (define-values (prefix max-let-depth) (PrefixForm prefix-form))
                    (zo:compilation-top
-                    eni
+                    max-let-depth
                     (hash)
-                    (zo:prefix
-                     0
-                     ;; TODO, only need #f if there are modules
-                     (append (map (lambda (x) (and x (variable->zo-variable x))) binding)
-                             (if (null? stx) '(#f) '()))
-                     stx
-                     'missing)
+                    prefix
                     (TopLevelForm top-level-form))])
+  (PrefixForm : prefix-form (e) -> * (0)
+              [(prefix (,binding ...) (,stx ...) ,eni)
+               (values
+                (zo:prefix
+                 0
+                 ;; TODO, only need #f if there are modules
+                 (append (map (lambda (x) (and x (variable->zo-variable x))) binding)
+                         (if (null? stx) '(#f) '()))
+                 stx
+                 'missing)
+                eni)])
   (TopLevelForm : top-level-form (e) -> * ()
                 [(#%expression ,expr)
                  (Expr expr)]
@@ -93,25 +99,26 @@
                  (zo:splice (map TopLevelForm top-level-form))]
                 [(#%require ,raw-require-spec ...)
                  (void)]
-                [(begin-for-syntax* ,top-level-form ...)
+                [(begin-for-syntax* ,prefix-form ,top-level-form ...)
                  (void)]
-                [(define-syntaxes* (,v ...) ,expr)
+                [(define-syntaxes* (,v ...) ,prefix-form ,expr)
                  (void)])
   (ModuleLevelForm : module-level-form (e) -> * ()
                    [(#%declare ,declaration-keyword ...)
                     (void)])
   (SubmoduleForm : submodule-form (e) -> * ()
-                 [(module ,id ,module-path (,v* ...) (,v** ...) (,stx ...) ,eni
+                 [(module ,id ,module-path ,prefix-form
                           (,raw-provide-spec ...)
                           (,raw-require-spec ...)
                           (,module-level-form ...)
                           (,syntax-level-form ...)
                           (,submodule-form ...)
                           (,submodule-form* ...))
+                  (define-values (prefix max-let-depth) (PrefixForm prefix-form))
                   (zo:mod id
                           id
                           (module-path-index-join #f #f)
-                          (zo:prefix 0 (append (map variable-name v*) '(#f)) stx 'missing)
+                          prefix
                           (map RawProvideSpec raw-provide-spec)
                           (map RawRequireSpec
                                (cons (with-output-language (Lfindletdepth raw-require-spec)
@@ -120,7 +127,7 @@
                           (map ModuleLevelForm module-level-form)
                           '()
                           '()
-                          eni
+                          max-let-depth
                           (zo:toplevel 0 0 #f #f)
                           #f
                           #t
