@@ -1253,6 +1253,11 @@
                                   (#%plain-module-begin
                                    (+ 1 2))))
              (compile-compare
+              #'(define-syntax defvar
+                  (syntax-rules ()
+                    [(_ name val)
+                     (namespace-variable-value 'name #f)])))
+             (compile-compare
               #'(begin
                   (module foo racket
                     (#%plain-module-begin

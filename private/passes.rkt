@@ -201,7 +201,9 @@
                        [(define-values (,v ...) ,[expr])
                         (values `(define-values (,v ...) ,expr)
                                 v)])
-  (TopLevelForm : top-level-form (e) -> top-level-form ())
+  (TopLevelForm : top-level-form (e) -> top-level-form ()
+                [(define-syntaxes* (,v ...) ,[expr])
+                 `(define-syntaxes* (,v ...) (prefix ()) ,expr)])
   (Expr : expr (e) -> expr ('())))
 
 (define-pass scrub-require-provide : Lmodulevars (e) -> Lscrubreqprov ()

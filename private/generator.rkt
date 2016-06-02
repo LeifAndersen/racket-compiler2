@@ -60,6 +60,7 @@
     (define transformers* (dict-ref exports phase #f))
     (define indirect-exports* (dict-ref indirect-exports phase #f))
     (cond
+      [(not exports*) -1]
       [(dict-has-key? exports* v)
        (define e (dict-keys exports*))
        (- (length e) (length (memq v e)))]
