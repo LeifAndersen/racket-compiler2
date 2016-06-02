@@ -57,7 +57,7 @@ script:
  - raco pkg install --deps search-auto
  - raco test -x private/tests.rkt
  - raco pkg install --deps search-auto doc-coverage
- - raco doc-coverage main.rkt
+# - raco doc-coverage main.rkt
 
 after_success:
   - raco setup --check-deps zordoz
