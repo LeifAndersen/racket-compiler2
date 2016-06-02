@@ -216,20 +216,22 @@
       (not (equal? p not-projected))))
   (RawRequireSpec : raw-require-spec (e [project not-projected]) -> raw-require-spec ()
                   [,raw-module-path
-                   `(for-meta 0 ,(if (equal? project 0)
+                   `(for-meta 0 ,(if (or (not (projected? project))
+                                         (equal? project 0))
                                      (PhaselessReqSpec raw-module-path project)
                                      null) ...)]
                   [(just-meta ,phase-level ,raw-require-spec)
                    (RawRequireSpec raw-require-spec phase-level)]
                   [(for-meta ,phase-level ,phaseless-req-spec)
-                   `(for-meta ,phase-level ,(if (equal? project phase-level)
+                   `(for-meta ,phase-level ,(if (or (not (projected? project))
+                                                    (equal? project phase-level))
                                                 (PhaselessReqSpec phaseless-req-spec project)
                                                 null) ...)])
   (PhaselessReqSpec : phaseless-req-spec (e [project not-projected]) -> * ()
                     [,raw-module-path
                      (if (projected? project)
                          (list) ;; TODO
-                         raw-module-path)]
+                         (list raw-module-path))]
                     [(only ,raw-module-path ,v ...)
                      (list)] ;; TODO
                     [(all-except ,raw-module-path ,v* ...)
@@ -240,9 +242,12 @@
                      (list)]) ;; TODO
   (RawProvideSpec : raw-provide-spec (e [protected? #f]) -> raw-provide-spec ()
                   [,phaseless-prov-spec
-                   `(for-meta* 0 ,(PhaselessProvSpec phaseless-prov-spec protected?) ...)]
+                   `(for-meta*
+                     0 ,(PhaselessProvSpec phaseless-prov-spec protected?) ...)]
                   [(for-meta* ,phase-level ,phaseless-prov-spec)
-                   `(for-meta* ,phase-level ,(PhaselessProvSpec phaseless-prov-spec protected?))]
+                   `(for-meta*
+                     ,phase-level
+                     ,(PhaselessProvSpec phaseless-prov-spec protected?) ...)]
                   [(protect ,[raw-provide-spec #t -> raw-provide-spec])
                    raw-provide-spec])
  (PhaselessProvSpec : phaseless-prov-spec (e [protected? #f]) -> * ()

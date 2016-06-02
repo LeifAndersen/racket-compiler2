@@ -365,12 +365,12 @@
           ((#%plain-app (primitive void)) (#%plain-app (primitive void)))
           () ()))
       (check-compiler-equal?
-       (current-compile #'(module foo racket/base
+       (current-compile #'(module foo racket
                             (#%plain-module-begin
                              (begin-for-syntax
                                (define x 5)
                                (#%provide x)))))
-       `(module foo racket/base
+       `(module foo racket
           ((for-meta* 1 ,x))
           ()
           ((begin-for-syntax
@@ -382,7 +382,7 @@
                            (#%plain-module-begin
                             (#%require racket/match)
                             (display (+ 1 2)))))
-      `(module test racket
+      `(module test racket/base
          ()
          (racket/match)
          ((#%plain-app (primitive void))
@@ -469,9 +469,9 @@
                             rest))
        `(begin*
           (#%require (for-meta 0 racket/list))
-          ,(make-variable rest)))
+          ,(make-variable 'rest)))
       (check-compiler-equal?
-       (current-compile #'(module test racket/base
+       (current-compile #'(module test racket
                             (#%plain-module-begin
                              (#%require racket/match)
                              (display (+ 1 2)))))
