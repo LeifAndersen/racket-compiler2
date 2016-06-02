@@ -215,13 +215,21 @@
     (define (projected? p)
       (not (equal? p not-projected))))
   (RawRequireSpec : raw-require-spec (e [project not-projected]) -> raw-require-spec ()
+                  [,raw-module-path
+                   `(for-meta 0 ,(if (equal? project 0)
+                                     (PhaselessReqSpec raw-module-path project)
+                                     null) ...)]
+                  [(just-meta ,phase-level ,raw-require-spec)
+                   (RawRequireSpec raw-require-spec phase-level)]
                   [(for-meta ,phase-level ,phaseless-req-spec)
                    `(for-meta ,phase-level ,(if (equal? project phase-level)
                                                 (PhaselessReqSpec phaseless-req-spec project)
                                                 null) ...)])
   (PhaselessReqSpec : phaseless-req-spec (e [project not-projected]) -> * ()
                     [,raw-module-path
-                     (list)] ;; TODO
+                     (if (projected? project)
+                         (list) ;; TODO
+                         raw-module-path)]
                     [(only ,raw-module-path ,v ...)
                      (list)] ;; TODO
                     [(all-except ,raw-module-path ,v* ...)

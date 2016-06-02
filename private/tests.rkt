@@ -376,8 +376,19 @@
           ((begin-for-syntax
              (define-values (,x) '5)
              (#%plain-app (primitive void))))
-          () ())))))
-
+          () ()))
+     (check-compiler-equal?
+      (current-compile #'(module test racket/base
+                           (#%plain-module-begin
+                            (#%require racket/match)
+                            (display (+ 1 2)))))
+      `(module test racket
+         ()
+         (racket/match)
+         ((#%plain-app (primitive void))
+          (#%plain-app (primitive display) (#%plain-app (primitive +) '1 '2)))
+         () ())))))
+                       
 ;; ===================================================================================================
 
 (module+ test
@@ -447,25 +458,35 @@
 
 ;; ===================================================================================================
 
-;; TODO, these tests
 (module+ test
   (update-current-compile!)
-  #;(block
+  (block
     (define x (make-variable 'x))
-    (define-compiler-test Lsrubreqprov top-level-form
-      (check-equal?
+    (define-compiler-test Lscrubreqprov top-level-form
+      (check-compiler-equal?
        (current-compile #'(begin
                             (require racket/list)
                             rest))
        `(begin*
           (#%require (for-meta 0 racket/list))
           ,(make-variable rest)))
-      (check-equal?
+      (check-compiler-equal?
+       (current-compile #'(module test racket/base
+                            (#%plain-module-begin
+                             (#%require racket/match)
+                             (display (+ 1 2)))))
+       `(module test racket (prefix ())
+          ()
+          ((for-meta 0 racket/match))
+          ((#%plain-app (primitive void))
+           (#%plain-app (primitive display) (#%plain-app (primitive +) '1 '2)))
+          () () ()))
+      (check-compiler-equal?
        (current-compile #'(module foo racket
                             (#%plain-module-begin
                              (provide x)
                              (define x 5))))
-       `(module foo racket (,x) ()
+       `(module foo racket (prefix (,x))
           ((for-meta* 0 ,x)) ()
           ((#%plain-app (primitive void))
            (define-values (,x) '5))
