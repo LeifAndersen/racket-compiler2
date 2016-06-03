@@ -226,8 +226,27 @@
                        (+ (protect v)
                           (protect-rename* v1 v2))))
 
-(define-language Lbeginexplicit
+(define-language Lindirectprov
   (extends Lscrubreqprov)
+  (submodule-form (submodule-form)
+                  (- (module id module-path prefix-form
+                       (raw-provide-spec ...)
+                       (raw-require-spec ...)
+                       (module-level-form ...)
+                       (syntax-level-form ...)
+                       (submodule-form ...)
+                       (submodule-form* ...)))
+                  (+ (module id module-path prefix-form
+                       (raw-provide-spec ...)
+                       (raw-require-spec ...)
+                       (raw-provide-spec* ...)
+                       (module-level-form ...)
+                       (syntax-level-form ...)
+                       (submodule-form ...)
+                       (submodule-form* ...)))))
+
+(define-language Lbeginexplicit
+  (extends Lindirectprov)
   (lambda (lambda)
     (+ (#%plain-lambda formals expr)))
   (expr (expr)

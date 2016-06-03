@@ -109,12 +109,13 @@
                     (void)])
   (SubmoduleForm : submodule-form (e) -> * ()
                  [(module ,id ,module-path ,prefix-form
-                          (,raw-provide-spec ...)
-                          (,raw-require-spec ...)
-                          (,module-level-form ...)
-                          (,syntax-level-form ...)
-                          (,submodule-form ...)
-                          (,submodule-form* ...))
+                    (,raw-provide-spec ...)
+                    (,raw-require-spec ...)
+                    (,raw-provide-spec* ...)
+                    (,module-level-form ...)
+                    (,syntax-level-form ...)
+                    (,submodule-form ...)
+                    (,submodule-form* ...))
                   (define-values (prefix max-let-depth) (PrefixForm prefix-form))
                   (zo:mod id
                           id

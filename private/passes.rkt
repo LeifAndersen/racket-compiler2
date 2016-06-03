@@ -215,23 +215,17 @@
     (define (projected? p)
       (not (equal? p not-projected))))
   (RawRequireSpec : raw-require-spec (e [project not-projected]) -> raw-require-spec ()
-                  [,raw-module-path
-                   `(for-meta 0 ,(if (or (not (projected? project))
-                                         (equal? project 0))
-                                     (PhaselessReqSpec raw-module-path project)
-                                     null) ...)]
+                  [,phaseless-req-spec
+                   `(for-meta 0 ,(PhaselessReqSpec phaseless-req-spec project) ...)]
                   [(just-meta ,phase-level ,raw-require-spec)
                    (RawRequireSpec raw-require-spec phase-level)]
                   [(for-meta ,phase-level ,phaseless-req-spec)
-                   `(for-meta ,phase-level ,(if (or (not (projected? project))
-                                                    (equal? project phase-level))
-                                                (PhaselessReqSpec phaseless-req-spec project)
-                                                null) ...)])
+                   `(for-meta ,phase-level ,(PhaselessReqSpec phaseless-req-spec project) ...)])
   (PhaselessReqSpec : phaseless-req-spec (e [project not-projected]) -> * ()
                     [,raw-module-path
                      (if (projected? project)
                          (list) ;; TODO
-                         (list raw-module-path))]
+                         (list (RawModulePath raw-module-path project)))]
                     [(only ,raw-module-path ,v ...)
                      (list)] ;; TODO
                     [(all-except ,raw-module-path ,v* ...)
@@ -240,6 +234,7 @@
                      (list)] ;; TODO
                     [(rename ,raw-module-path ,v1 ,v2)
                      (list)]) ;; TODO
+  (RawModulePath : raw-module-path (e [project not-projected]) -> raw-module-path ())
   (RawProvideSpec : raw-provide-spec (e [protected? #f]) -> raw-provide-spec ()
                   [,phaseless-prov-spec
                    `(for-meta*
@@ -271,10 +266,57 @@
                        (for/list ([pps (in-list phaseless-prov-spec)])
                          (PhaselessProvSpec pps #t)))]))
 
+;; Cleans up provided bindings and ensures an order for both them and
+;;  unprovided bindings
+(define-pass add-indirect-provide : Lscrubreqprov (e) -> Lindirectprov ()
+  (definitions
+    (define prov-table (make-hash))
+    (define req-table (make-hash))
+    (define (extend-table table phase phaseless-specs)
+      (dict-update! table
+                    phase
+                    (lambda (existing-specs) (append existing-specs phaseless-specs))
+                    (lambda () '()))))
+  (MakeRawRequireSpec : * (phase phaseless-specs) -> raw-require-spec ()
+                      `(for-meta ,phase ,phaseless-specs ...))
+  (PhaselessReqSpec : phaseless-req-spec (e) -> phaseless-req-spec ())
+  (RawRequireSpec! : raw-require-spec (e) -> * ()
+                   [(for-meta ,phase-level ,phaseless-req-spec ...)
+                    (extend-table req-table phase-level
+                                  (map PhaselessReqSpec phaseless-req-spec))])
+  (MakeRawProvideSpec : * (phase phaseless-specs) -> raw-provide-spec ()
+                      `(for-meta* ,phase ,phaseless-specs ...))
+  (PhaselessProvSpec : phaseless-prov-spec (e) -> phaseless-prov-spec ())
+  (RawProvideSpec! : raw-provide-spec (e) -> * ()
+                   [(for-meta* ,phase-level ,phaseless-prov-spec ...)
+                    (extend-table prov-table phase-level
+                                  (map PhaselessProvSpec phaseless-prov-spec))])
+  (SubmoduleForm : submodule-form (e) -> submodule-form ()
+                 [(module ,id ,module-path ,[prefix-form]
+                    (,raw-provide-spec ...)
+                    (,[raw-require-spec] ...)
+                    (,[module-level-form] ...)
+                    (,[syntax-level-form] ...)
+                    (,[submodule-form] ...)
+                    (,[submodule-form*] ...))
+                  (map RawRequireSpec! raw-require-spec)
+                  (map RawProvideSpec! raw-provide-spec)
+                  (define indirect-provide-spec null) ;; TODO!!!
+                  `(module ,id ,module-path ,prefix-form
+                     (,(for/list ([(k v) (in-hash prov-table)])
+                         (MakeRawProvideSpec k v)) ...)
+                     (,(for/list ([(k v) (in-hash req-table)])
+                         (MakeRawRequireSpec k v)) ...)
+                     (,indirect-provide-spec ...)
+                     (,module-level-form ...)
+                     (,syntax-level-form ...)
+                     (,submodule-form ...)
+                     (,submodule-form* ...))]))
+
 ;; Makes explicit begins so that only they need to deal with expression blocks.
 ;; Could probably be dealt with in parse-and-rename
 ;; Also marks variables as being referenced.
-(define-pass make-begin-explicit : Lscrubreqprov (e) -> Lbeginexplicit ()
+(define-pass make-begin-explicit : Lindirectprov (e) -> Lbeginexplicit ()
   (Expr : expr (e) -> expr ()
         [,v (set-binding-referenced?! (variable-binding v) #t) v]
         [(#%plain-lambda ,[formals] ,[expr*] ... ,[expr])
@@ -282,13 +324,13 @@
              `(#%plain-lambda ,formals ,expr)
              `(#%plain-lambda ,formals (begin ,expr* ... ,expr)))]
         [(case-lambda (,formals ,expr* ... ,expr))
-         (with-output-language (Lscrubreqprov expr)
+         (with-output-language (Lindirectprov expr)
            (make-begin-explicit `(#%plain-lambda ,formals ,expr* ... ,expr)))]
         [(case-lambda (,formals ,expr* ... ,expr) ...)
          `(case-lambda ,(for/list ([f (in-list formals)]
                                    [e* (in-list expr*)]
                                    [e (in-list expr)])
-                          (with-output-language (Lscrubreqprov expr)
+                          (with-output-language (Lindirectprov expr)
                             (make-begin-explicit `(#%plain-lambda ,f ,e* ... ,e))))
                        ...)]
         [(let-values ([(,v ...) ,[expr1]] ...)
@@ -591,16 +633,18 @@
   (ModuleLevelForm : module-level-form (e [env '()]) -> module-level-form ('() '()))
   (SubmoduleForm : submodule-form (e [env '()]) -> submodule-form ('() '())
                  [(module ,id ,module-path ,prefix-form
-                          (,[raw-provide-spec] ...)
-                          (,[raw-require-spec] ...)
-                          (,[module-level-form free-local free-global] ...)
-                          (,[syntax-level-form] ...)
-                          (,[submodule-form] ...)
-                          (,[submodule-form*] ...))
+                    (,[raw-provide-spec] ...)
+                    (,[raw-require-spec] ...)
+                    (,[raw-provide-spec*] ...)
+                    (,[module-level-form free-local free-global] ...)
+                    (,[syntax-level-form] ...)
+                    (,[submodule-form] ...)
+                    (,[submodule-form*] ...))
                   (values
                    `(module ,id ,module-path ,(PrefixForm prefix-form free-global)
                       (,raw-provide-spec ...)
                       (,raw-require-spec ...)
+                      (,raw-provide-spec* ...)
                       (,module-level-form ...)
                       (,syntax-level-form ...)
                       (,submodule-form ...)
@@ -644,20 +688,22 @@
   (ModuleLevelForm : module-level-form (e [globals '()]) -> module-level-form ())
   (SubmoduleForm : submodule-form (e [globals '()]) -> submodule-form ()
                  [(module ,id ,module-path ,[prefix-form binding]
-                          (,[raw-provide-spec] ...)
-                          (,[raw-require-spec] ...)
-                          (,module-level-form ...)
-                          (,[syntax-level-form] ...)
-                          (,[submodule-form1 (set-union globals binding) -> submodule-form] ...)
-                          (,[submodule-form1* (set-union globals binding) -> submodule-form*] ...))
+                    (,[raw-provide-spec] ...)
+                    (,[raw-require-spec] ...)
+                    (,[raw-provide-spec*] ...)
+                    (,module-level-form ...)
+                    (,[syntax-level-form] ...)
+                    (,[submodule-form1 (set-union globals binding) -> submodule-form] ...)
+                    (,[submodule-form1* (set-union globals binding) -> submodule-form*] ...))
                   `(module ,id ,module-path ,prefix-form
-                           (,raw-provide-spec ...)
-                           (,raw-require-spec ...)
-                           (,(for/list ([mlf (in-list module-level-form)])
-                               (ModuleLevelForm mlf binding)) ...)
-                           (,syntax-level-form ...)
-                           (,submodule-form ...)
-                           (,submodule-form* ...))]))
+                     (,raw-provide-spec ...)
+                     (,raw-require-spec ...)
+                     (,raw-provide-spec* ...)
+                     (,(for/list ([mlf (in-list module-level-form)])
+                         (ModuleLevelForm mlf binding)) ...)
+                     (,syntax-level-form ...)
+                     (,submodule-form ...)
+                     (,submodule-form* ...))]))
 
 (define-pass closurify-letrec : Lraisetoplevel (e) -> Lclosurify ()
   (definitions
@@ -760,6 +806,7 @@
                  [(module ,id ,module-path ,[prefix-form]
                     (,[raw-provide-spec] ...)
                     (,[raw-require-spec] ...)
+                    (,[raw-provide-spec*] ...)
                     (,[module-level-form] ...)
                     (,[syntax-level-form] ...)
                     (,submodule-form ...)
@@ -771,6 +818,7 @@
                   `(module ,id ,module-path ,prefix-form
                      (,raw-provide-spec ...)
                      (,raw-require-spec ...)
+                     (,raw-provide-spec* ...)
                      (,module-level-form ...)
                      (,syntax-level-form ...)
                      (,sf ...)
@@ -807,6 +855,7 @@
                  [(module ,id ,module-path ,[prefix-form]
                     (,[raw-provide-spec] ...)
                     (,[raw-require-spec] ...)
+                    (,[raw-provide-spec*] ...)
                     (,[module-level-form] ...)
                     (,[syntax-level-form] ...)
                     (,[submodule-form] ...)
@@ -814,6 +863,7 @@
                   `(module ,id ,module-path ,prefix-form
                      (,raw-provide-spec ...)
                      (,raw-require-spec ...)
+                     (,raw-provide-spec* ...)
                      (,module-level-form ...)
                      (,syntax-level-form ...)
                      (,submodule-form ...)
@@ -914,24 +964,26 @@
   (SubmoduleForm : submodule-form (e [env '()] [frame 0] [global-env '()] [prefix-frame '()])
                  -> submodule-form ()
                  [(module ,id ,module-path ,[prefix-form]
-                          (,[raw-provide-spec] ...)
-                          (,[raw-require-spec] ...)
-                          (,module-level-form ...)
-                          (,[syntax-level-form] ...)
-                          (,submodule-form ...)
-                          (,submodule-form* ...))
+                    (,[raw-provide-spec] ...)
+                    (,[raw-require-spec] ...)
+                    (,[raw-provide-spec*] ...)
+                    (,module-level-form ...)
+                    (,[syntax-level-form] ...)
+                    (,submodule-form ...)
+                    (,submodule-form* ...))
                   (define global-env* (hash-union global-env (make-global-env prefix-form)
                                                   #:combine (lambda (v1 v2) v2)))
                   `(module ,id ,module-path ,prefix-form
-                           (,raw-provide-spec ...)
-                           (,raw-require-spec ...)
-                           (,(for/list ([mlf (in-list module-level-form)])
-                               (ModuleLevelForm mlf env frame global-env* prefix-frame)) ...)
-                           (,syntax-level-form ...)
-                           (,(for/list ([sf (in-list submodule-form)])
-                               (SubmoduleForm sf env frame global-env* prefix-frame)) ...)
-                           (,(for/list ([sf (in-list submodule-form*)])
-                               (SubmoduleForm sf env frame global-env* prefix-frame)) ...))])
+                     (,raw-provide-spec ...)
+                     (,raw-require-spec ...)
+                     (,raw-provide-spec ...)
+                     (,(for/list ([mlf (in-list module-level-form)])
+                         (ModuleLevelForm mlf env frame global-env* prefix-frame)) ...)
+                     (,syntax-level-form ...)
+                     (,(for/list ([sf (in-list submodule-form)])
+                         (SubmoduleForm sf env frame global-env* prefix-frame)) ...)
+                     (,(for/list ([sf (in-list submodule-form*)])
+                         (SubmoduleForm sf env frame global-env* prefix-frame)) ...))])
   (ModuleLevelForm : module-level-form (e [env '()] [frame 0] [global-env '()] [prefix-frame 0])
                    -> module-level-form ())
   (CompilationTop : compilation-top (e) -> compilation-top ()
@@ -1010,16 +1062,18 @@
   (ModuleLevelForm : module-level-form (e) -> module-level-form (0))
   (SubmoduleForm : submodule-form (e) -> submodule-form (0)
                  [(module ,id ,module-path ,prefix-form
-                          (,[raw-provide-spec] ...)
-                          (,[raw-require-spec] ...)
-                          (,[module-level-form depth] ...)
-                          (,[syntax-level-form] ...)
-                          (,[submodule-form** depth**] ...)
-                          (,[submodule-form* depth*] ...))
+                    (,[raw-provide-spec] ...)
+                    (,[raw-require-spec] ...)
+                    (,[raw-provide-spec*] ...)
+                    (,[module-level-form depth] ...)
+                    (,[syntax-level-form] ...)
+                    (,[submodule-form** depth**] ...)
+                    (,[submodule-form* depth*] ...))
                   (values `(module ,id ,module-path
                              ,(PrefixForm prefix-form depth)
                              (,raw-provide-spec ...)
                              (,raw-require-spec ...)
+                             (,raw-provide-spec* ...)
                              (,module-level-form ...)
                              (,syntax-level-form ...)
                              (,submodule-form** ...)

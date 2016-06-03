@@ -499,6 +499,31 @@
   (block
     (define x (make-variable 'x))
     (define y (make-variable 'y))
+    (define-compiler-test Lindirectprov top-level-form
+      (check-compiler-equal?
+       (current-compile #'(module foo racket
+                            (#%plain-module-begin
+                             (define x 5)
+                             (define y 6)
+                             (provide x)
+                             (provide y))))
+       `(module foo racket (prefix (,y ,x))
+          ((for-meta* 0 ,x ,y))
+          ()
+          ()
+          ((define-values (,x) '5)
+           (define-values (,y) '6)
+           (#%plain-app (primitive void))
+           (#%plain-app (primitive void)))
+          () () ())))))
+
+;; ===================================================================================================
+
+(module+ test
+  (update-current-compile!)
+  (block
+    (define x (make-variable 'x))
+    (define y (make-variable 'y))
     (define f (make-variable 'f))
     (define-compiler-test Lbeginexplicit top-level-form
       (check-compiler-equal?
@@ -517,8 +542,8 @@
                      (#%plain-lambda (,x ,y) (begin ,x (#%plain-app (primitive +) ,x ,y)))))
       (check-compiler-equal?
        (current-compile #'(letrec ([f 5])
-                      (display "Hello")
-                      f))
+                            (display "Hello")
+                            f))
        `(letrec-values ([(,f) '5])
           (begin
             (#%plain-app (primitive display) '"Hello")
@@ -888,7 +913,7 @@
                    (define-values (,x) '5)
                    (define-values (,y) '6)
                    (module foo racket/base (prefix (,z ,x))
-                     () ()
+                     () () ((for-meta* 0 ,x ,z))
                      ((define-values (,x) '12)
                       (define-values (,z) '13))
                      () () ()))))
@@ -908,7 +933,7 @@
                              (define-syntax w 'hello))))
        `(program (prefix ())
                  (module foobar racket/base (prefix (,z ,y ,x))
-                   () ()
+                   () () ((for-meta* 0 ,x ,y ,z))
                    ((define-values (,x) '5)
                     (define-values (,y ,z) (#%plain-app (primitive values) '6 '7))
                     (#%plain-app (primitive void)))
@@ -991,7 +1016,7 @@
                              (random))))
        `(program (prefix ())
                  (module foo racket (prefix (,r))
-                   () ()
+                   () () ()
                    ((#%plain-app (#%top . ,r)))
                    () () ()))))))
 
@@ -1159,7 +1184,7 @@
                             x))
        `(program (,x*) (begin*
                       (module foo racket (,x*) ()
-                              (,x*) ()
+                              (,x*) () ()
                               ((#%plain-app (primitive 35))
                                (define-values (0) '12))
                               ()
@@ -1286,7 +1311,7 @@
                   (module bar racket
                     (#%plain-module-begin
                      (random)))))
-             #;(compile-compare #'(begin
+             (compile-compare #'(begin
                                   (module foo racket
                                     (#%plain-module-begin
                                      (provide x)

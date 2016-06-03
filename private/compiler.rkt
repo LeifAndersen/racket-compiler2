@@ -44,6 +44,7 @@
   (lift-syntax-sequences modules)
   (identify-module-variables modules)
   (scrub-require-provide modules)
+  (add-indirect-provide modules)
   (make-begin-explicit parse)
   (identify-assigned-variables mutable-variable-elimination)
   purify-letrec
@@ -64,3 +65,20 @@
 ;(current-variable-printer debug-variable-printer)
 ;(current-module-binding-printer module-binding-printer)
 ;(require nanopass/base)
+
+#;(define code #'(begin
+                 (module foo racket
+                   (#%plain-module-begin
+                    (provide x)
+                    (define x 481)))
+                 (require 'foo)
+                 x))
+
+#;(define code #'(module foo racket
+                 (#%plain-module-begin
+                  dict-set)))
+
+;(define code #'dict-set)
+
+;(compile/20 code)
+;(compile/21 code)
