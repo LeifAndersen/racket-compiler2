@@ -206,6 +206,8 @@
                  `(define-syntaxes* (,v ...) (prefix ()) ,expr)])
   (Expr : expr (e) -> expr ('())))
 
+;; Removes all of the forms in #%require and #%provide so it's just renames, protects
+;;   and phase levels.
 (define-pass scrub-require-provide : Lmodulevars (e) -> Lscrubreqprov ()
   (definitions
     (define not-projected
@@ -267,11 +269,18 @@
                          (PhaselessProvSpec pps #t)))]))
 
 ;; Cleans up provided bindings and ensures an order for both them and
-;;  unprovided bindings
+;;   unprovided bindings, additionally, only one for-meta exists for
+;;   each require/provide phase level
 (define-pass add-indirect-provide : Lscrubreqprov (e) -> Lindirectprov ()
   (definitions
-    (define prov-table (make-hash))
-    (define req-table (make-hash))
+    (define current-prov-table (make-parameter (make-hash)))
+    (define current-req-table (make-parameter (make-hash)))
+    (define current-indirect-table (make-parameter (make-hash)))
+    (define (table-contains table phase phaseless-specs)
+      (define phased-table (dict-ref table phase #f))
+      (if phased-table
+          (filter (curry set-member? phased-table) phaseless-specs)
+          phaseless-specs))
     (define (extend-table table phase phaseless-specs)
       (dict-update! table
                     phase
@@ -282,36 +291,62 @@
   (PhaselessReqSpec : phaseless-req-spec (e) -> phaseless-req-spec ())
   (RawRequireSpec! : raw-require-spec (e) -> * ()
                    [(for-meta ,phase-level ,phaseless-req-spec ...)
-                    (extend-table req-table phase-level
+                    (extend-table (current-req-table) phase-level
                                   (map PhaselessReqSpec phaseless-req-spec))])
   (MakeRawProvideSpec : * (phase phaseless-specs) -> raw-provide-spec ()
                       `(for-meta* ,phase ,phaseless-specs ...))
   (PhaselessProvSpec : phaseless-prov-spec (e) -> phaseless-prov-spec ())
   (RawProvideSpec! : raw-provide-spec (e) -> * ()
                    [(for-meta* ,phase-level ,phaseless-prov-spec ...)
-                    (extend-table prov-table phase-level
+                    (extend-table (current-prov-table) phase-level
                                   (map PhaselessProvSpec phaseless-prov-spec))])
+  (ModuleLevelForm : module-level-form (e [phase 0]) -> module-level-form ()
+                   [(define-values (,v ...) ,[expr])
+                    (extend-table (current-indirect-table)
+                                  phase
+                                  (table-contains (current-prov-table) phase v))
+                    `(define-values (,v ...) ,expr)])
+  (SyntaxLevelForm : syntax-level-form (e) -> syntax-level-form ()
+                   [(syntax ,eni (,syntax-body ...))
+                    (define syntax-body* (map (curryr SyntaxBody eni) syntax-body))
+                    `(syntax ,eni (,syntax-body* ...))])
+  (SyntaxBody : syntax-body (e [phase 0]) -> syntax-body ()
+              [(define-syntaxes (,v ...) ,[prefix-form] ,[expr])
+               (extend-table (current-indirect-table)
+                             phase
+                             (table-contains (current-prov-table) phase v))
+               `(define-syntaxes (,v ...) ,prefix-form ,expr)])
   (SubmoduleForm : submodule-form (e) -> submodule-form ()
                  [(module ,id ,module-path ,[prefix-form]
                     (,raw-provide-spec ...)
-                    (,[raw-require-spec] ...)
-                    (,[module-level-form] ...)
-                    (,[syntax-level-form] ...)
-                    (,[submodule-form] ...)
-                    (,[submodule-form*] ...))
+                    (,raw-require-spec ...)
+                    (,module-level-form ...)
+                    (,syntax-level-form ...)
+                    (,submodule-form ...)
+                    (,submodule-form* ...))
                   (map RawRequireSpec! raw-require-spec)
                   (map RawProvideSpec! raw-provide-spec)
-                  (define indirect-provide-spec null) ;; TODO!!!
+                  (define module-level-form* (map (curryr ModuleLevelForm 0) module-level-form))
+                  (define syntax-level-form* (map SyntaxLevelForm syntax-level-form))
                   `(module ,id ,module-path ,prefix-form
-                     (,(for/list ([(k v) (in-hash prov-table)])
+                     (,(for/list ([(k v) (in-hash (current-prov-table))])
                          (MakeRawProvideSpec k v)) ...)
-                     (,(for/list ([(k v) (in-hash req-table)])
+                     (,(for/list ([(k v) (in-hash (current-req-table))])
                          (MakeRawRequireSpec k v)) ...)
-                     (,indirect-provide-spec ...)
-                     (,module-level-form ...)
-                     (,syntax-level-form ...)
-                     (,submodule-form ...)
-                     (,submodule-form* ...))]))
+                     (,(for/list ([(k v) (in-hash (current-indirect-table))])
+                         (MakeRawProvideSpec k v)) ...)
+                     (,module-level-form* ...)
+                     (,syntax-level-form* ...)
+                     (,(for/list ([sf (in-list submodule-form)])
+                         (parameterize ([current-req-table (make-hash)]
+                                        [current-prov-table (make-hash)]
+                                        [current-indirect-table (make-hash)])
+                           (SubmoduleForm sf))) ...)
+                     (,(for/list ([sf* (in-list submodule-form*)])
+                         (parameterize ([current-req-table (make-hash)]
+                                        [current-prov-table (make-hash)]
+                                        [current-indirect-table (make-hash)])
+                           (SubmoduleForm sf*))) ...))]))
 
 ;; Makes explicit begins so that only they need to deal with expression blocks.
 ;; Could probably be dealt with in parse-and-rename
@@ -448,6 +483,13 @@
               (assigned (,v* ...)
                         ,expr*)))]))
 
+;; Converts assigned variables using the assigned variable pass from earlier.
+;;   Assignments are now explicitely boxed:
+;;     (set!-values (x) 5) -> (set!-boxes (x) 5)
+;;   When an assigned variable is referenced, it is converted:
+;;     x -> (#%unbox x)
+;;   Finaally, the form that assigned the variable is converted to
+;;     x -> (let ([x (#%box x)]) ...)
 (define-pass convert-assignments : Lpurifyletrec (e) -> Lconvertassignments ()
   (definitions
     (define ((lookup-env env) x)
@@ -506,6 +548,11 @@
              `(set!-boxes (,v ...) ,expr*)
              `(set!-values (,(map (lookup-env env) v) ...) ,expr*))]))
 
+;; First part of closure conversion, detects which variables are free
+;;   and attaches them to their respective procedures.
+;;     (lambda (x) y) -> (lambda (x) (free (y) () y))
+;; The first parens are for local variables and the second parens
+;;   are for global (module level) variables.
 (define-pass uncover-free : Lconvertassignments (e) -> Luncoverfree ()
   (definitions
     (define-syntax-rule (formals->identifiers* formals)
