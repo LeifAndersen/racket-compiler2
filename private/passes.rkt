@@ -279,7 +279,7 @@
     (define (table-contains table phase phaseless-specs)
       (define phased-table (dict-ref table phase #f))
       (if phased-table
-          (filter (curry set-member? phased-table) phaseless-specs)
+          (filter (curry (negate set-member?) phased-table) phaseless-specs)
           phaseless-specs))
     (define (extend-table table phase phaseless-specs)
       (dict-update! table
@@ -329,11 +329,14 @@
                   (define module-level-form* (map (curryr ModuleLevelForm 0) module-level-form))
                   (define syntax-level-form* (map SyntaxLevelForm syntax-level-form))
                   `(module ,id ,module-path ,prefix-form
-                     (,(for/list ([(k v) (in-hash (current-prov-table))])
+                     (,(for/list ([(k v) (in-hash (current-prov-table))]
+                                  #:unless (null? v))
                          (MakeRawProvideSpec k v)) ...)
-                     (,(for/list ([(k v) (in-hash (current-req-table))])
+                     (,(for/list ([(k v) (in-hash (current-req-table))]
+                                  #:unless (null? v))
                          (MakeRawRequireSpec k v)) ...)
-                     (,(for/list ([(k v) (in-hash (current-indirect-table))])
+                     (,(for/list ([(k v) (in-hash (current-indirect-table))]
+                                  #:unless (null? v))
                          (MakeRawProvideSpec k v)) ...)
                      (,module-level-form* ...)
                      (,syntax-level-form* ...)
