@@ -123,6 +123,20 @@
   (PhaselessProvSpec : phaseless-prov-spec (e) -> phaseless-prov-spec ())
   (PhaselessReqSpec : phaseless-req-spec (e) -> phaseless-req-spec ()))
 
+;; This pass lifts all of the begin-for-syntax and define-syntax sequences in a module to the
+;;   top of the module. ZO bytecode requires them to be split up this way, and also makes it easier
+;;   process.
+;; Note that begin-for-syntax and define-syntax forms at the top level (not in a module)
+;;   are not lifted. As such, they can also remane nested.
+;; Example of transofmration:
+;;    (module foo racket
+;;      (begin-for-syntax
+;;        (begin-for-syntax
+;;          (define x 5))))
+;;    =>
+;;    (module foo racket
+;;      ((void))
+;;      ((syntax 2 (begin-for-syntax (define x 5))))) 
 (define-pass lift-syntax-sequences : Lreqprov (e) -> Lsyntax ()
   (definitions
     (define (merge-syntax-tables tables)
@@ -174,6 +188,9 @@
                                                    `(define-syntaxes (,v ...) ,expr))))])
   (Expr : expr (e) -> expr ((hash))))
 
+;; This pass, combined with the identify-free-variables pass, work together to
+;;   find all of the module level variables used in the program. This information
+;;   is places into the modules/top-levels/syntax's prefix array.
 (define-pass identify-module-variables : Lsyntax (e) -> Lmodulevars ()
   (SubmoduleForm : submodule-form (e) -> submodule-form ()
                  [(module ,id ,module-path
@@ -276,6 +293,8 @@
     (define current-prov-table (make-parameter (make-hash)))
     (define current-req-table (make-parameter (make-hash)))
     (define current-indirect-table (make-parameter (make-hash)))
+    (define current-values-table (make-parameter (make-hash)))
+    (define current-syntaxes-table (make-parameter (make-hash)))
     (define (table-contains table phase phaseless-specs)
       (define phased-table (dict-ref table phase #f))
       (if phased-table
@@ -294,7 +313,15 @@
                     (extend-table (current-req-table) phase-level
                                   (map PhaselessReqSpec phaseless-req-spec))])
   (MakeRawProvideSpec : * (phase phaseless-specs) -> raw-provide-spec ()
-                      `(for-meta* ,phase ,phaseless-specs ...))
+                      (define phaseless-value-specs (dict-ref (current-values-table) phase null))
+                      (define phaseless-syntax-specs (dict-ref (current-syntaxes-table) phase null))
+                      `(for-meta* ,phase
+                                  (,(for/list ([ps (in-list phaseless-specs)]
+                                               #:when (set-member? phaseless-value-specs ps))
+                                      ps) ...)
+                                  (,(for/list ([ps phaseless-specs]
+                                               #:when (set-member? phaseless-syntax-specs ps))
+                                      ps) ...)))
   (PhaselessProvSpec : phaseless-prov-spec (e) -> phaseless-prov-spec ())
   (RawProvideSpec! : raw-provide-spec (e) -> * ()
                    [(for-meta* ,phase-level ,phaseless-prov-spec ...)
@@ -305,6 +332,9 @@
                     (extend-table (current-indirect-table)
                                   phase
                                   (table-contains (current-prov-table) phase v))
+                    (extend-table (current-values-table)
+                                  phase
+                                  v)
                     `(define-values (,v ...) ,expr)])
   (SyntaxLevelForm : syntax-level-form (e) -> syntax-level-form ()
                    [(syntax ,eni (,syntax-body ...))
@@ -312,9 +342,13 @@
                     `(syntax ,eni (,syntax-body* ...))])
   (SyntaxBody : syntax-body (e [phase 0]) -> syntax-body ()
               [(define-syntaxes (,v ...) ,[prefix-form] ,[expr])
+               (define phase* (- phase 1))
                (extend-table (current-indirect-table)
-                             phase
-                             (table-contains (current-prov-table) phase v))
+                             phase*
+                             (table-contains (current-prov-table) phase* v))
+               (extend-table (current-syntaxes-table)
+                             phase*
+                             v)
                `(define-syntaxes (,v ...) ,prefix-form ,expr)])
   (SubmoduleForm : submodule-form (e) -> submodule-form ()
                  [(module ,id ,module-path ,[prefix-form]
@@ -343,12 +377,16 @@
                      (,(for/list ([sf (in-list submodule-form)])
                          (parameterize ([current-req-table (make-hash)]
                                         [current-prov-table (make-hash)]
-                                        [current-indirect-table (make-hash)])
+                                        [current-indirect-table (make-hash)]
+                                        [current-values-table (make-hash)]
+                                        [current-syntaxes-table (make-hash)])
                            (SubmoduleForm sf))) ...)
                      (,(for/list ([sf* (in-list submodule-form*)])
                          (parameterize ([current-req-table (make-hash)]
                                         [current-prov-table (make-hash)]
-                                        [current-indirect-table (make-hash)])
+                                        [current-indirect-table (make-hash)]
+                                        [current-values-table (make-hash)]
+                                        [current-syntaxes-table (make-hash)])
                            (SubmoduleForm sf*))) ...))]))
 
 ;; Makes explicit begins so that only they need to deal with expression blocks.

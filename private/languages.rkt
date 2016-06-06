@@ -228,6 +228,11 @@
 
 (define-language Lindirectprov
   (extends Lscrubreqprov)
+  (raw-provide-spec (raw-provide-spec rps)
+                    (- (for-meta* phase-level phaseless-prov-spec ...))
+                    (+ (for-meta* phase-level
+                                  (phaseless-prov-spec ...)
+                                  (phaseless-prov-spec* ...))))
   (submodule-form (submodule-form)
                   (- (module id module-path prefix-form
                        (raw-provide-spec ...)

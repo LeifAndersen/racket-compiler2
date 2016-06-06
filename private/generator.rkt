@@ -214,7 +214,9 @@
                    eni4
                    (Expr expr))])
   (RawProvideSpec : raw-provide-spec (e) -> * ()
-                  [(for-meta* ,phase-level ,phaseless-prov-spec ...)
+                  [(for-meta* ,phase-level
+                              (,phaseless-prov-spec ...)
+                              (,phaseless-prov-spec* ...))
                    (void)])
   (PhaselessProvSpec : phaseless-prov-spec (e) -> * ()
                      [,v (void)]
