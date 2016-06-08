@@ -33,6 +33,11 @@
          "languages.rkt"
          "utils.rkt")
 
+(define current-module-registry (make-parameter #f))
+
+;; Converts a variable structure into the type of variable zo bytecode
+;;    expects.
+;; Variable -> (U Symbol Module-Variable Global-Bucket)
 (define (variable->zo-variable v)
   (define binding (variable-binding v))
   (cond [(module-binding? binding)
@@ -46,42 +51,54 @@
         [else
          (variable-name v)]))
 
-; Module-Path Symbol Exact-Nonneagtive-Integer -> Exact-Nonnegative-Integer
+;; Module-Path Symbol Exact-Nonneagtive-Integer -> Exact-Nonnegative-Integer
 (define (module-binding->offset mod v phase)
-  (parameterize ([current-namespace (make-base-namespace)])
-    (namespace-require 'racket)
-    (define mod* (let ([m (resolve-module-path-index mod (current-directory))])
-                   (if (symbol? m) mod m)))
-    (dynamic-require mod* (void))
-    (define-values (exports transformers)
-      (module->exports mod*))
-    (define indirect-exports (module->indirect-exports mod*))
-    (define exports* (dict-ref exports phase #f))
-    (define transformers* (dict-ref exports phase #f))
-    (define indirect-exports* (dict-ref indirect-exports phase #f))
-    (cond
-      [(not exports*) -1]
-      [(dict-has-key? exports* v)
-       (define e (dict-keys exports*))
-       (- (length e) (length (memq v e)))]
-      [(set-member? indirect-exports* v)
-       (define e indirect-exports*)
-       (+ (length (dict-keys exports*))
-          (- (length e) (length (memq v e))))]
-      [else -1])))
+  (define-values (mod* internal-mod?)
+    (let ([m (resolve-module-path-index mod (current-directory))])
+      (cond
+        [(or (and (symbol? m)
+                  (module-in-registry? (current-module-registry) (list m)))
+             (and (list? m)
+                  (module-in-registry? (current-module-registry) m)))
+         (values m #t)]
+        [(symbol? m) (values mod #f)]
+        [else (values m #f)])))
+  (cond
+    [internal-mod?
+     (define index (module->variable-index (current-module-registry) mod v phase))
+     (or index -1)]
+    [else
+     (dynamic-require mod* (void))
+     (define-values (exports transformers)
+       (module->exports mod*))
+     (define indirect-exports (module->indirect-exports mod*))
+     (define exports* (dict-ref exports phase #f))
+     (define transformers* (dict-ref exports phase #f))
+     (define indirect-exports* (dict-ref indirect-exports phase #f))
+     (cond
+       [(not exports*) -1]
+       [(dict-has-key? exports* v)
+        (define e (dict-keys exports*))
+        (- (length e) (length (memq v e)))]
+       [(set-member? indirect-exports* v)
+        (define e indirect-exports*)
+        (+ (length (dict-keys exports*))
+           (- (length e) (length (memq v e))))]
+       [else -1])]))
 
 (define zo-void
   (zo:primval 35))
 
-(define-pass generate-zo-structs : Lfindletdepth (e) -> * ()
+(define-pass generate-zo-structs : Lbuildmoduleregistry (e) -> * ()
   (CompilationTop : compilation-top (e) -> * ()
-                  [(program ,prefix-form ,top-level-form)
-                   (define-values (prefix max-let-depth) (PrefixForm prefix-form))
-                   (zo:compilation-top
-                    max-let-depth
-                    (hash)
-                    prefix
-                    (TopLevelForm top-level-form))])
+                  [(program ,prefix-form ,module-registry ,top-level-form)
+                   (parameterize ([current-module-registry module-registry])
+                     (define-values (prefix max-let-depth) (PrefixForm prefix-form))
+                     (zo:compilation-top
+                      max-let-depth
+                      (hash)
+                      prefix
+                      (TopLevelForm top-level-form)))])
   (PrefixForm : prefix-form (e) -> * (0)
               [(prefix (,binding ...) (,stx ...) ,eni)
                (values

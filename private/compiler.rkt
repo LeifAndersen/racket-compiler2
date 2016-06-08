@@ -58,6 +58,7 @@
   reintroduce-syntax
   (debruijn-indices debruijn)
   (find-let-depth debruijn)
+  build-module-registry
   (generate-zo-structs generate-bytecode)
   (zo-marshal generate-bytecode)
   bytes->compiled-expression)
@@ -66,7 +67,7 @@
 ;(current-module-binding-printer module-binding-printer)
 ;(require nanopass/base)
 
-#;(define code #'(begin
+(define code #'(begin
                  (module foo racket
                    (#%plain-module-begin
                     (provide x)
@@ -80,5 +81,6 @@
 
 ;(define code #'dict-set)
 
-;(compile/20 code)
-;(compile/21 code)
+;(compile/8 code)
+(compile/22 code)
+(compile/23 code)

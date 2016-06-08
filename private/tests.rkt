@@ -1214,6 +1214,13 @@
                                 x)))
        `(program (prefix () () 1) '6))))
 
+;; ===================================================================================================
+
+(module+ test
+  (update-current-compile!))
+
+;; ===================================================================================================
+
 (module+ test
   (parameterize ([current-environment-variables
                   (environment-variables-copy (current-environment-variables))])

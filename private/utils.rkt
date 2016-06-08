@@ -4,6 +4,7 @@
 
 (require nanopass/base
          racket/set
+         racket/dict
          racket/struct
          racket/port
          rackunit
@@ -244,3 +245,64 @@
 
 (define orig-insp (variable-reference->module-declaration-inspector
                    (#%variable-reference)))
+
+;; Internal module registry, for handeling modules
+;;   defined in this current compilation unit.
+;; Module-Registry ::= (Hashof (Listof Module-Spec)
+;;                             (Hashof (U Integer #f)
+;;                                     (Listof Symbol)))
+;; Module-Spec ::= <Anything from phaseless-req-spe>
+(struct module-registry (registry
+                         current-module-path)
+  #:mutable)
+(define (make-module-registry)
+  (module-registry (make-hash) (make-parameter null)))
+(define (module-registry->current-module-path registry)
+  (module-registry-current-module-path registry))
+
+(define (split-module-registry mod)
+  (values (module-registry-registry mod)
+          (module-registry-current-module-path mod)))
+
+;; Adds a module to the current module registry.
+;; Works by appending the module to the end of the current-module-path.
+;;   This enables us to properly handle submodules.
+;; Module-Registry Symbol (Listof Variables) -> Void
+(define (add-module-to-registry! registry mod variables)
+  (define-values (internal-module-registry current-module-path) (split-module-registry registry))
+  (dict-set! internal-module-registry (append (current-module-path) (list mod)) variables))
+
+;; Normalizes an absolute module path so that two module
+;;   paths are equal? if they should be the same module in the
+;;   module registry.
+;; Note that this function will fail if a relative module path is given.
+;; Module-Registry (Listof Module-Spec) -> (Listof Symbol)
+(define (normalize-module-path mod)
+  (reverse
+   (for/fold ([acc null])
+             ([m (in-list mod)])
+     (if (equal? m "..")
+         (car acc)
+         (cons m acc)))))
+
+;; Determines if a module is in the current module registry
+;; (Listof Module-Spec) -> Boolean
+(define (module-in-registry? registry mod)
+  (define-values (internal-module-registry current-module-path) (split-module-registry registry))
+  (define mod* (normalize-module-path mod))
+  (dict-has-key? internal-module-registry mod*))
+
+;; Finds the variable index into the offset of that module's variable list
+;; (Listof Module-Spec) Variable -> Exact-Nonnegative-Integer
+(define (module->variable-index registry mod variable phase)
+  (define-values (internal-module-registry current-module-path) (split-module-registry registry))
+  (define module-variables
+    (dict-ref (dict-ref internal-module-registry
+                        (normalize-module-path (append (current-module-path) mod))
+                        (error 'module-registry "Module not in registry: ~a" mod))
+              phase
+              (error 'module-registry "Module ~a does not phase level ~a" mod phase)))
+  (define tmp (member variable module-variables))
+  (if tmp
+      (length tmp)
+      (error 'module-registry "Module ~a does not contain variable ~a" mod variable)))

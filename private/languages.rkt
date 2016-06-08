@@ -445,3 +445,11 @@
   (lambda (lambda)
     (- (#%plain-lambda eni1 boolean (binding2 ...) (binding3 ...) expr))
     (+ (#%plain-lambda eni1 boolean (binding2 ...) (binding3 ...) eni4 expr))))
+
+(define-language Lbuildmoduleregistry
+  (extends Lfindletdepth)
+  (terminals
+   (+ (module-registry (module-registry))))
+  (compilation-top (compilation-top)
+                   (- (program prefix-form top-level-form))
+                   (+ (program prefix-form module-registry top-level-form))))
