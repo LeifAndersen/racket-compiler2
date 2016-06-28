@@ -63,9 +63,10 @@
   (zo-marshal generate-bytecode)
   bytes->compiled-expression)
 
-;(current-variable-printer debug-variable-printer)
-;(current-module-binding-printer module-binding-printer)
-;(require nanopass/base)
+(current-variable-printer debug-variable-printer)
+(current-module-binding-printer module-binding-printer)
+(current-module-registry-printer debug-module-registry-printer)
+(require nanopass/base)
 
 (define code #'(begin
                  (module foo racket
@@ -82,5 +83,7 @@
 ;(define code #'dict-set)
 
 ;(compile/8 code)
-(compile/22 code)
-(compile/23 code)
+;(compile/22 code)
+;(compile/23 code)
+;(compile code)
+;(eval (compile/24 code))

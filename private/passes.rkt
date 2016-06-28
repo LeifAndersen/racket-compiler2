@@ -1064,7 +1064,7 @@
                   `(module ,id ,module-path ,prefix-form
                      (,raw-provide-spec ...)
                      (,raw-require-spec ...)
-                     (,raw-provide-spec ...)
+                     (,raw-provide-spec* ...)
                      (,(for/list ([mlf (in-list module-level-form)])
                          (ModuleLevelForm mlf env frame global-env* prefix-frame)) ...)
                      (,syntax-level-form ...)
@@ -1190,7 +1190,7 @@
   (CompilationTop : compilation-top (e) -> compilation-top ()
                   [(program ,[prefix-form] ,[top-level-form])
                    `(program ,prefix-form ,internal-module-registry ,top-level-form)])
-  (SubmoduleForm : submodule-form (e) -> * ()
+  (SubmoduleForm : submodule-form (e) -> submodule-form ()
                  [(module ,id ,module-path ,[prefix-form]
                     (,[raw-provide-spec] ...)
                     (,[raw-require-spec] ...)
@@ -1199,17 +1199,19 @@
                     (,[syntax-level-form] ...)
                     (,submodule-form ...)
                     (,submodule-form* ...))
+                  (define rps (RawProvideSpec->hash raw-provide-spec))
+                  (define rps* (RawProvideSpec->hash raw-provide-spec*))
+                  (add-module-to-registry!
+                   internal-module-registry
+                   id
+                   (hash-union rps rps*
+                               #:combine (lambda (a b)
+                                           (append a b))))
                   (parameterize ([current-module-path (append (current-module-path) (list id))])
-                    (add-module-to-registry!
-                     internal-module-registry
-                     id
-                     (for*/hash ([(k v) (in-dict (RawProvideSpec->hash raw-provide-spec))]
-                                 [(k* v*) (in-dict (RawProvideSpec->hash raw-provide-spec*))]
-                                 #:when (equal? k k*))
-                       (values k (append v v*))))
                     `(module ,id ,module-path ,prefix-form
                        (,raw-provide-spec ...)
                        (,raw-require-spec ...)
+                       (,raw-provide-spec* ...)
                        (,module-level-form ...)
                        (,syntax-level-form ...)
                        (,(map SubmoduleForm submodule-form) ...)

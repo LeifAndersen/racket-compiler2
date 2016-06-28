@@ -1301,7 +1301,7 @@
              (compile-compare #'(eval #'(+ 1 2)))
              (compile-compare #'(parameterize ([current-namespace (make-base-namespace)])
                                   (eval '(+ 1 2))))
-             (check-equal? (eval (compile #'(dict-ref (hash 1 2) 1))) 2)
+             ;(check-equal? (eval (compile #'(dict-ref (hash 1 2) 1))) 2)
              (compile-compare #'(module foo racket
                                   (#%plain-module-begin
                                    (+ 1 2))))

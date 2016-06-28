@@ -3,12 +3,15 @@
 (provide (protect-out (all-defined-out)))
 
 (require nanopass/base
+         racket/match
          racket/set
          racket/dict
          racket/struct
          racket/port
+         racket/function
          rackunit
          compiler/zo-parse
+         syntax/modresolve
          syntax/toplevel
          syntax/strip-context)
 
@@ -254,7 +257,19 @@
 ;; Module-Spec ::= <Anything from phaseless-req-spe>
 (struct module-registry (registry
                          current-module-path)
-  #:mutable)
+  #:mutable
+  #:methods gen:custom-write
+  [(define (write-proc data port mode)
+     ((current-module-registry-printer) data port mode))])
+(define current-module-registry-printer
+  (make-parameter
+   (make-constructor-style-printer
+    (lambda (obj) 'module-registry)
+    (lambda (obj) null))))
+(define debug-module-registry-printer
+  (make-constructor-style-printer
+   (lambda (obj) 'module-registry)
+   (lambda (obj) (list (module-registry-registry obj) ((module-registry-current-module-path obj))))))
 (define (make-module-registry)
   (module-registry (make-hash) (make-parameter null)))
 (define (module-registry->current-module-path registry)
@@ -276,7 +291,7 @@
 ;;   paths are equal? if they should be the same module in the
 ;;   module registry.
 ;; Note that this function will fail if a relative module path is given.
-;; Module-Registry (Listof Module-Spec) -> (Listof Symbol)
+;; (Listof Module-Spec) -> (Listof Symbol)
 (define (normalize-module-path mod)
   (reverse
    (for/fold ([acc null])
@@ -285,24 +300,38 @@
          (car acc)
          (cons m acc)))))
 
+;; Converts a module path from something produced by resolve-module-path-index
+;;   into something that our compiler level module-registry can handle
+;; Module-Registry Module-Path -> (Listof Module-Spec)
+(define (convert-module-path registry mod-path)
+  (define-values (internal-module-registry current-module-path) (split-module-registry registry))
+  (match mod-path
+    [(? symbol?) (list mod-path)]
+    [(? path?) (displayln (current-module-path)) (displayln mod-path) (list (car (current-module-path)))]
+    [`(submod ,_ ,submods ...)
+     (cons (car (current-module-path)) submods)]
+    [else #f]))
+
 ;; Determines if a module is in the current module registry
-;; (Listof Module-Spec) -> Boolean
+;; Module-Registry (Listof Module-Spec) -> Boolean
 (define (module-in-registry? registry mod)
   (define-values (internal-module-registry current-module-path) (split-module-registry registry))
   (define mod* (normalize-module-path mod))
   (dict-has-key? internal-module-registry mod*))
 
 ;; Finds the variable index into the offset of that module's variable list
-;; (Listof Module-Spec) Variable -> Exact-Nonnegative-Integer
+;; Module-Registry (Listof Module-Spec) Variable -> Exact-Nonnegative-Integer
 (define (module->variable-index registry mod variable phase)
   (define-values (internal-module-registry current-module-path) (split-module-registry registry))
   (define module-variables
     (dict-ref (dict-ref internal-module-registry
-                        (normalize-module-path (append (current-module-path) mod))
-                        (error 'module-registry "Module not in registry: ~a" mod))
+                        mod
+                        (lambda () (error 'module-registry "Module not in registry: ~a" mod)))
               phase
-              (error 'module-registry "Module ~a does not phase level ~a" mod phase)))
-  (define tmp (member variable module-variables))
+              (lambda ()
+                (error 'module-registry "Module ~a does not contain phase level ~a" mod phase))))
+  (define tmp (member variable (map variable-name module-variables)))
   (if tmp
-      (length tmp)
-      (error 'module-registry "Module ~a does not contain variable ~a" mod variable)))
+      (- (length module-variables) (length tmp))
+      (error 'module-registry "Module ~a does not contain variable ~a at phase ~a"
+             mod variable phase)))

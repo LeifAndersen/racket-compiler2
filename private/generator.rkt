@@ -54,18 +54,17 @@
 ;; Module-Path Symbol Exact-Nonneagtive-Integer -> Exact-Nonnegative-Integer
 (define (module-binding->offset mod v phase)
   (define-values (mod* internal-mod?)
-    (let ([m (resolve-module-path-index mod (current-directory))])
+    (let* ([m (resolve-module-path-index mod (string->path "."))]
+           [m* (convert-module-path (current-module-registry) m)])
       (cond
-        [(or (and (symbol? m)
-                  (module-in-registry? (current-module-registry) (list m)))
-             (and (list? m)
-                  (module-in-registry? (current-module-registry) m)))
-         (values m #t)]
+        [(and m*
+              (module-in-registry? (current-module-registry) m*))
+         (values m* #t)]
         [(symbol? m) (values mod #f)]
         [else (values m #f)])))
   (cond
     [internal-mod?
-     (define index (module->variable-index (current-module-registry) mod v phase))
+     (define index (module->variable-index (current-module-registry) mod* v phase))
      (or index -1)]
     [else
      (dynamic-require mod* (void))
@@ -133,27 +132,31 @@
                     (,syntax-level-form ...)
                     (,submodule-form ...)
                     (,submodule-form* ...))
-                  (define-values (prefix max-let-depth) (PrefixForm prefix-form))
-                  (zo:mod id
-                          id
-                          (module-path-index-join #f #f)
-                          prefix
-                          (map RawProvideSpec raw-provide-spec)
-                          (map RawRequireSpec
-                               (cons (with-output-language (Lfindletdepth raw-require-spec)
-                                       `(for-meta 0 ,module-path))
-                                     raw-require-spec))
-                          (map ModuleLevelForm module-level-form)
-                          '()
-                          '()
-                          max-let-depth
-                          (zo:toplevel 0 0 #f #f)
-                          #f
-                          #t
-                          (hash)
-                          '()
-                          (map SubmoduleForm submodule-form)
-                          (map SubmoduleForm submodule-form*))])
+                  (parameterize ([(module-registry->current-module-path (current-module-registry))
+                                  (append ((module-registry->current-module-path
+                                            (current-module-registry)))
+                                          (list id))])
+                    (define-values (prefix max-let-depth) (PrefixForm prefix-form))
+                    (zo:mod id
+                            id
+                            (module-path-index-join #f #f)
+                            prefix
+                            (map RawProvideSpec raw-provide-spec)
+                            (map RawRequireSpec
+                                 (cons (with-output-language (Lbuildmoduleregistry raw-require-spec)
+                                         `(for-meta 0 ,module-path))
+                                       raw-require-spec))
+                            (map ModuleLevelForm module-level-form)
+                            '()
+                            '()
+                            max-let-depth
+                            (zo:toplevel 0 0 #f #f)
+                            #f
+                            #t
+                            (hash)
+                            '()
+                            (map SubmoduleForm submodule-form)
+                            (map SubmoduleForm submodule-form*)))])
   (GeneralTopLevelForm : general-top-level-form (e) -> * ()
                        [(define-values (,eni ...) ,expr)
                         (zo:def-values (for/list ([i (in-list eni)])
@@ -234,9 +237,18 @@
                   [(for-meta* ,phase-level
                               (,phaseless-prov-spec ...)
                               (,phaseless-prov-spec* ...))
-                   (void)])
+                   (list phase-level
+                         (map PhaselessProvSpec phaseless-prov-spec)
+                         (map PhaselessProvSpec phaseless-prov-spec*))])
   (PhaselessProvSpec : phaseless-prov-spec (e) -> * ()
-                     [,v (void)]
+                     [,v
+                      (define binding (variable-binding v))
+                      (zo:provided (module-binding-source-id binding)
+                                   (module-binding-source-mod binding)
+                                   (module-binding-nominal-source-id binding)
+                                   (module-binding-nominal-source-mod binding)
+                                   (module-binding-source-phase binding)
+                                   #f)]
                      [(rename* ,v1 ,v2)
                       (void)]
                      [(protect ,v)
