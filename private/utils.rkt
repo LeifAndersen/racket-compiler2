@@ -93,15 +93,17 @@
 ; Binding object, ensures that two variables are equal.
 (struct binding (properties
                  assigned?
-                 referenced?)
+                 referenced?
+                 toplevel?)
   #:mutable
   #:methods gen:custom-write
   [(define (write-proc data port mode)
      ((current-binding-printer) data port mode))])
 (define (make-binding #:properties [properties (make-hash)]
                       #:assigned? [assigned? #f]
-                      #:referenced? [referenced? #f])
-  (binding properties assigned? referenced?))
+                      #:referenced? [referenced? #f]
+                      #:top-level? [top-level? #f])
+  (binding properties assigned? referenced? top-level?))
 
 (define current-binding-printer
   (make-parameter
@@ -201,54 +203,3 @@
   (nanopass-case (lang top-level-form) exp
                  [(quote ,datum) #t]
                  [else #f]))
-
-; Converts a compiler expression to a ZO file.
-;  Similar to zordoz
-; Compiled-Expression -> ZO
-(define (compiled-expression->zo compiled)
-  (define-values (in out) (make-pipe))
-  (display compiled out)
-  (close-output-port out)
-  (define y (port->bytes in))
-  (close-input-port in)
-  (zo-parse (open-input-bytes y)))
-
-; Compiles a syntax object and converts it to a zo
-;  Similar to zordoz
-; Syntax -> ZO
-(define (syntax->zo stx)
-  (compiled-expression->zo (compile-syntax (expand-syntax-top-level-with-compile-time-evals stx))))
-
-(define (toplevel-syntax->zo stx)
-  (parameterize ([current-namespace (make-base-namespace)])
-    (namespace-require 'racket/undefined)
-    (map compiled-expression->zo
-         (eval-compile-time-part-of-top-level/compile
-           (expand-syntax-top-level-with-compile-time-evals
-             (namespace-syntax-introduce (strip-context stx)))))))
-
-
-;; Taken from Typed Racket
-;;   Typed Racket runs after macro expansion, and it must be priviledged,
-;;   so it can just disarm all taints (and arm everything afterward).
-; Syntax -> Syntax
-(define (disarm* stx)
-  (let loop ([v stx])
-    (cond
-     [(syntax? v)
-      (let* ([stx (syntax-disarm v orig-insp)]
-             [r (loop (syntax-e stx))])
-        (if (eq? r (syntax-e stx))
-            stx
-            (datum->syntax stx r stx stx)))]
-     [(pair? v) (let ([a (loop (car v))]
-                      [d (loop (cdr v))])
-                  (if (and (eq? a (car v))
-                           (eq? d (cdr v)))
-                      v
-                      (cons a d)))]
-     [else v])))
-
-(define orig-insp (variable-reference->module-declaration-inspector
-                   (#%variable-reference)))
-

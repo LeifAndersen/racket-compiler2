@@ -643,16 +643,16 @@
                                 ,(inline-expressions expr 'value env* effort-counter size-counter)))]
              [(struct* app ()) (inline e context env effort-counter size-counter)])])
   
-  (TopLevelForm : top-level-form (e [context context]
-                                    [env env]
-                                    [effort-counter effort-counter]
-                                    [size-counter size-counter])
-                -> top-level-form ())
+  (LinkletForm : linklet-form (e [context context]
+                                 [env env]
+                                 [effort-counter effort-counter]
+                                 [size-counter size-counter])
+                -> linklet-form ())
   
   (begin
     ;(printf "inline-expressions:~n exp: ~a~n env: ~a~n ctx: ~a~n~n" e env context)
     (decrement! effort-counter 1)
-    (TopLevelForm e context env effort-counter size-counter)))
+    (LinkletForm e context env effort-counter size-counter)))
 
 (define (~inline-expressions e
                              [context 'value]

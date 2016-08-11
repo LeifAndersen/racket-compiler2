@@ -32,6 +32,14 @@
          "languages.rkt"
          "utils.rkt")
 
+;; Identify all assigned variables in a function. (variables that are set!-ed)
+;; This has two major effects.
+;;   First, the surce for functions is changed:
+;;   (#%plain-lambda (id ...) body) =>
+;;   (#%plpain-lambda (id ...) (abody (id ...) body)
+;;   Where the id list in the abody is the assigned variables
+;; Second, the mutated field in every variable is updated to denote
+;;   that it is assigned.
 (define-pass identify-assigned-variables : Lsrc (e) -> Lidentifyassigned ()
   (definitions
     (define-syntax-rule (formals->identifiers* fmls)
@@ -83,9 +91,11 @@
                         (values `(define-values (,v ...) ,expr)
                                 (set-subtract assigned v))])
   (LinkletForm : linklet-form (e) -> linklet-form ('()))
-  (let-values ([(e* free*) (TopLevelForm e)])
+  (let-values ([(e* free*) (LinkletForm e)])
     e*))
 
+;; Purify letrecs so that they only contain lambda expressions that are not
+;;   ever assigned.
 (define-pass purify-letrec : Lidentifyassigned (e) -> Lpurifyletrec ()
   (Expr : expr (e) -> expr ()
         [(set! ,v ,[expr])
@@ -116,6 +126,7 @@
               (set!-values (,v ...) ,expr) ...
               (assigned (,v* ...)
                         ,expr*)))]))
+
 
 ;; Converts assigned variables using the assigned variable pass from earlier.
 ;;   Assignments are now explicitely boxed:
@@ -252,8 +263,6 @@
          (if (set-member? env v)
              (values `(#%unbox ,v) (list v) '())
              (values `(#%unbox ,v) '() (list v)))]
-        [(#%top . ,v)
-         (values `(#%top . ,v) '() (list v))]
         [(#%variable-reference)
          (values `(#%variable-reference)
                  null
@@ -262,8 +271,6 @@
          (if (set-member? env v)
              (values `(#%variable-reference ,v) (list v) '())
              (values `(#%variable-reference ,v) '() (list v)))]
-        [(#%variable-reference-top ,v)
-         (values `(#%variable-reference-top ,v) '() (list v))]
         ;; Everything below here really is boilerplate
         [(case-lambda ,[lambda free-local free-global] ...)
          (values `(case-lambda ,lambda ...)
@@ -296,72 +303,11 @@
          (values `(#%plain-app ,expr ,expr* ...)
                  (apply set-union free-local free-local*)
                  (apply set-union free-global free-global*))])
-  (PrefixForm : prefix-form (e [new-globals-lists '()]) -> prefix-form ()
-              [(prefix (,binding ...))
-               `(prefix (,(apply set-union binding new-globals-lists) ...))])
-  (LinkletForm : linklet-form (e) -> linklet-form ('() '())
-               [(linklet (,[linklet-reqprov] ...)
-                         (,[linklet-reqprov*] ...)
-                         ,prefix-form
-                         ,[general-top-level-form free-local free-global] ...)
-                `(linklet (,linklet-reqprov ...)
-                          (,linklet-reqprov* ...)
-                          ,(PrefixForm prefix-form free-global)
-                          ,general-top-level-from ...)])
-  (LinletkBundleForm : linklet-bundle-form (e) -> linklet-bundle-form ('() '())
-                  ...)
-  (let-values ([(e* local* global*) (LinkletBundleForm e '())])
-    `(program (prefix (,global* ...)) ,e*)))
+  (LinkletForm : linklet-form (e) -> linklet-form ('() '()))
+  (let-values ([(expr locals globals) (LinkletForm e)])
+    expr))
 
-(define-pass raise-toplevel-variables : Luncoverfree (e) -> Lraisetoplevel ()
-  (CompilationTop : compilation-top (e [globals '()]) -> compilation-top ()
-                  [(program ,[prefix-form binding] ,top-level-form)
-                   `(program ,prefix-form ,(TopLevelForm top-level-form binding))])
-  (PrefixForm : prefix-form (e) -> prefix-form ('())
-              [(prefix (,binding ...))
-               (values `(prefix (,binding ...)) binding)])
-  (Expr : expr (e [globals '()]) -> expr ()
-        [(set!-values (,v) ,[expr])
-         (guard (set-member? globals v))
-         `(set!-global ,v ,expr)]
-        [,v (guard (set-member? globals v)) `(#%top . ,v)]
-        [(#%variable-reference ,v)
-         (guard (set-member? globals v))
-         `(#%variable-reference-top ,v)])
-  (FBody : free-body (e [globals '()]) -> free-body ())
-  (Lambda : lambda (e [globals '()]) -> lambda ()
-          #;[(#%plain-lambda (,id ...) ,[fbody])
-           (displayln globals)
-           `(#%plain-lambda (,id ...) ,fbody)])
-  (TopLevelForm : top-level-form (e [globals '()]) -> top-level-form ()
-                [,expr (Expr e globals)]
-                #;[(begin* ,top-level-form ...)
-                 (displayln globals)
-                 `(begin* ,(map (curryr TopLevelForm globals) top-level-form) ...)])
-                #;[(#%expression ,[expr])
-                 `(#%expression ,expr)]
-  (GeneralTopLevelForm : general-top-level-form (e [globals '()]) -> general-top-level-form ())
-  (ModuleLevelForm : module-level-form (e [globals '()]) -> module-level-form ())
-  (SubmoduleForm : submodule-form (e [globals '()]) -> submodule-form ()
-                 [(module ,id ,module-path ,[prefix-form binding]
-                    (,[raw-provide-spec] ...)
-                    (,[raw-require-spec] ...)
-                    (,[raw-provide-spec*] ...)
-                    (,module-level-form ...)
-                    (,[syntax-level-form] ...)
-                    (,[submodule-form1 (set-union globals binding) -> submodule-form] ...)
-                    (,[submodule-form1* (set-union globals binding) -> submodule-form*] ...))
-                  `(module ,id ,module-path ,prefix-form
-                     (,raw-provide-spec ...)
-                     (,raw-require-spec ...)
-                     (,raw-provide-spec* ...)
-                     (,(for/list ([mlf (in-list module-level-form)])
-                         (ModuleLevelForm mlf binding)) ...)
-                     (,syntax-level-form ...)
-                     (,submodule-form ...)
-                     (,submodule-form* ...))]))
-
-(define-pass closurify-letrec : Lraisetoplevel (e) -> Lclosurify ()
+(define-pass closurify-letrec : Luncoverfree (e) -> Lclosurify ()
   (definitions
     (define (remove-index l index)
       (append (take l index) (drop l (+ 1 index)))))
@@ -379,12 +325,12 @@
          (if empty-index
              `(let ([,(list-ref v empty-index)
                      (closure ,(list-ref v empty-index)
-                              ,(Expr (with-output-language (Lraisetoplevel expr)
+                              ,(Expr (with-output-language (Luncoverfree expr)
                                        `(#%plain-lambda ,(list-ref formals empty-index)
                                                         (free (,(list-ref v1* empty-index) ...)
                                                               (,(list-ref binding2* empty-index) ...)
                                                               ,(list-ref expr* empty-index))))))])
-                ,(Expr (with-output-language (Lraisetoplevel expr)
+                ,(Expr (with-output-language (Luncoverfree expr)
                          `(letrec ([,(remove-index v empty-index)
                                     (#%plain-lambda ,(remove-index formals empty-index)
                                                     (free (,(remove-index v1* empty-index) ...)
@@ -415,117 +361,7 @@
                       (set!-values (,v) ,expr1) ...
                       ,expr))]))
 
-(define-pass scrub-syntax : Lvoidlets (e) -> Lscrubsyntax ()
-  (definitions
-
-    ;; Syntax Table maps integers to syntax objects
-    (struct syntax-table (ticket
-                          objects)
-      #:mutable)
-
-    ;; Constructs a new Syntax Table
-    ;; -> Syntax-Table
-    (define (make-syntax-table)
-      (syntax-table 0 '()))
-
-    ;; Add an element to the syntax table, returning the object's ticket,
-    ;;   and raising the ticket value for the next insertion
-    ;; Syntax-Table Any -> Syntax-Table
-    (define (add-syntax-to-table! table object)
-      (define ticket (syntax-table-ticket table))
-      (set-syntax-table-ticket! table (+ ticket 1))
-      (set-syntax-table-objects! table (cons object (syntax-table-objects table)))
-      ticket)
-
-    ;; Global table tat will store all of syntax objects for pre-compiling
-    ;;  with internal Racket compiler
-    ;;  (Should really be changed to handle the compilation on its own)
-    (define global-table (make-syntax-table))
-
-    ;; Module level syntax table for mapping syntax objects to their location in the
-    ;;  prefix struct.
-    (define current-module-table (make-parameter (make-syntax-table))))
-  (CompilationTop : compilation-top (e) -> compilation-top ()
-                  [(program ,prefix-form ,[top-level-form])
-                   `(program ,(PrefixForm prefix-form)
-                             (,(reverse (syntax-table-objects global-table)) ...)
-                             ,top-level-form)])
-  (PrefixForm : prefix-form (e) -> prefix-form ()
-              [(prefix (,binding ...))
-               `(prefix (,binding ...) 
-                        (,(reverse (syntax-table-objects (current-module-table))) ...))])
-  (TopLevelForm : top-level-form (e) -> top-level-form ()
-                [,submodule-form
-                 (parameterize ([current-module-table (make-syntax-table)])
-                   (SubmoduleForm submodule-form))])
-  (SubmoduleForm : submodule-form (e) -> submodule-form ()
-                 [(module ,id ,module-path ,[prefix-form]
-                    (,[raw-provide-spec] ...)
-                    (,[raw-require-spec] ...)
-                    (,[raw-provide-spec*] ...)
-                    (,[module-level-form] ...)
-                    (,[syntax-level-form] ...)
-                    (,submodule-form ...)
-                    (,submodule-form* ...))
-                  (define sf (parameterize ([current-module-table (make-syntax-table)])
-                               (map SubmoduleForm submodule-form)))
-                  (define sf* (parameterize ([current-module-table (make-syntax-table)])
-                                (map SubmoduleForm submodule-form*)))
-                  `(module ,id ,module-path ,prefix-form
-                     (,raw-provide-spec ...)
-                     (,raw-require-spec ...)
-                     (,raw-provide-spec* ...)
-                     (,module-level-form ...)
-                     (,syntax-level-form ...)
-                     (,sf ...)
-                     (,sf* ...))])
-  (Expr : expr (e) -> expr ()
-        [(quote-syntax ,syntax-object)
-         (define key (add-syntax-to-table! global-table syntax-object))
-         `(quote-syntax ,(add-syntax-to-table! (current-module-table) key))]
-        [(quote-syntax-local ,syntax-object)
-         (define key (add-syntax-to-table! global-table syntax-object))
-         `(quote-syntax ,(add-syntax-to-table! (current-module-table) key))]))
-
-(define-pass reintroduce-syntax : Lscrubsyntax (e) -> Lreintroducesyntax ()
-  (definitions
-    (define global-syntax-table (make-parameter '())))
-  (CompilationTop : compilation-top (e) -> compilation-top ()
-                  [(program ,prefix-form
-                            (,syntax-object ...)
-                            ,top-level-form)
-                   (define compiled (car (toplevel-syntax->zo
-                                          #`(list #,@(for/list ([s (in-list syntax-object)])
-                                                       #`(quote-syntax #,s #:local))))))
-                   (define syntax-table (zo:prefix-stxs
-                                         (zo:compilation-top-prefix compiled)))
-                   (parameterize ([global-syntax-table syntax-table])
-                     `(program ,(PrefixForm prefix-form)
-                               ,(TopLevelForm top-level-form)))])
-  (PrefixForm : prefix-form (e) -> prefix-form ()
-              [(prefix (,binding ...) (,eni ...))
-               `(prefix (,binding ...)
-                        (,(map (curry list-ref (global-syntax-table)) eni) ...))])
-  (TopLevelForm : top-level-form (e) -> top-level-form ())
-  (SubmoduleForm : submodule-form (e) -> submodule-form ()
-                 [(module ,id ,module-path ,[prefix-form]
-                    (,[raw-provide-spec] ...)
-                    (,[raw-require-spec] ...)
-                    (,[raw-provide-spec*] ...)
-                    (,[module-level-form] ...)
-                    (,[syntax-level-form] ...)
-                    (,[submodule-form] ...)
-                    (,[submodule-form*] ...))
-                  `(module ,id ,module-path ,prefix-form
-                     (,raw-provide-spec ...)
-                     (,raw-require-spec ...)
-                     (,raw-provide-spec* ...)
-                     (,module-level-form ...)
-                     (,syntax-level-form ...)
-                     (,submodule-form ...)
-                     (,submodule-form* ...))]))
-
-(define-pass debruijn-indices : Lreintroducesyntax (e) -> Ldebruijn ()
+(define-pass debruijn-indices : Lvoidlets (e) -> Ldebruijn ()
   (definitions
     (define-syntax-rule (formals->identifiers* fmls)
       (formals->identifiers Lreintroducesyntax fmls))
@@ -582,11 +418,8 @@
          `(set!-boxes ,count ,offset ,expr)]
         [(set!-global ,v ,[expr])
          `(set!-global ,(- frame prefix-frame) ,(dict-ref global-env v) ,expr)]
-        [(#%top . ,v) `(#%top ,(- frame prefix-frame) ,(dict-ref global-env v))]
-        [(quote-syntax ,eni) `(quote-syntax ,(- frame prefix-frame) ,eni)]
         [(#%variable-reference)
          `(#%variable-reference-none ,(- frame prefix-frame) ,(hash-ref global-env #f))]
-        [(#%variable-reference-top ,v) `(#%variable-reference-top 0)] ;; TODO: Global vars
         [(#%variable-reference ,v) `(#%variable-reference ,((var->index env frame) v))]
         [(let ([,v ,expr1])
            ,expr)
@@ -612,40 +445,12 @@
                        -> general-top-level-form ()
                        [(define-values (,v ...) ,[expr])
                         `(define-values (,(map ((curry dict-ref) global-env) v) ...) ,expr)])
-  (TopLevelForm : top-level-form (e [env '()] [frame 0] [global-env '()] [prefix-frame 0])
-                -> top-level-form ()
-                #;[(begin* ,top-level-form ...)
-                 (displayln "got here")
-                 `(begin* ,(map TopLevelForm top-level-form) ...)])
-  (SubmoduleForm : submodule-form (e [env '()] [frame 0] [global-env '()] [prefix-frame '()])
-                 -> submodule-form ()
-                 [(module ,id ,module-path ,[prefix-form]
-                    (,[raw-provide-spec] ...)
-                    (,[raw-require-spec] ...)
-                    (,[raw-provide-spec*] ...)
-                    (,module-level-form ...)
-                    (,[syntax-level-form] ...)
-                    (,submodule-form ...)
-                    (,submodule-form* ...))
-                  (define global-env* (hash-union global-env (make-global-env prefix-form)
-                                                  #:combine (lambda (v1 v2) v2)))
-                  `(module ,id ,module-path ,prefix-form
-                     (,raw-provide-spec ...)
-                     (,raw-require-spec ...)
-                     (,raw-provide-spec* ...)
-                     (,(for/list ([mlf (in-list module-level-form)])
-                         (ModuleLevelForm mlf env frame global-env* prefix-frame)) ...)
-                     (,syntax-level-form ...)
-                     (,(for/list ([sf (in-list submodule-form)])
-                         (SubmoduleForm sf env frame global-env* prefix-frame)) ...)
-                     (,(for/list ([sf (in-list submodule-form*)])
-                         (SubmoduleForm sf env frame global-env* prefix-frame)) ...))])
-  (ModuleLevelForm : module-level-form (e [env '()] [frame 0] [global-env '()] [prefix-frame 0])
-                   -> module-level-form ())
   (CompilationTop : compilation-top (e) -> compilation-top ()
                   [(program ,[prefix-form] ,top-level-form)
                    `(program ,prefix-form
                              ,(TopLevelForm top-level-form '() 0 (make-global-env prefix-form) 0))]))
+
+#|
 
 (define-pass find-let-depth : Ldebruijn (e) -> Lfindletdepth ()
   (PrefixForm : prefix-form (e depths) -> prefix-form ()
@@ -771,7 +576,7 @@
                   (define rps* (RawProvideSpec->hash raw-provide-spec*))
                   (add-module-to-registry!
                    internal-module-registry
-                   id
+  reintroducesyntax                 id
                    (hash-union rps rps*
                                #:combine (lambda (a b)
                                            (append a b))))
@@ -784,3 +589,5 @@
                        (,syntax-level-form ...)
                        (,(map SubmoduleForm submodule-form) ...)
                        (,(map SubmoduleForm submodule-form*) ...)))]))
+
+|#

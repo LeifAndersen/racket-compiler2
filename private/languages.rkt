@@ -18,7 +18,6 @@
    (phase-level (phase-level))
    (false (false))
    (exact-nonnegative-integer (exact-nonnegative-integer eni))
-   (syntax (syntax-object))
    (boolean (boolean))
    (number (number))
    (bytes (bytes))
@@ -36,7 +35,7 @@
   (get-import (get-import)
               procedure
               false)
-  (binding (binding)
+  (binding (binding local-binding global-binding)
            v
            false)
   (general-top-level-form (general-top-level-form)
@@ -69,19 +68,7 @@
   (formals (formals)
            v
            (v ...)
-           (v v* ... . v2))
-  (raw-module-path (raw-module-path)
-                   raw-root-module-path
-                   (submod raw-root-module-path id ...))
-  (raw-root-module-path (raw-root-module-path)
-                        id
-                        string
-                        (quote* id)
-                        (lib string ...)
-                        (file string)
-                        (planet string1
-                                (string2 string3 string* ...))
-                        path))
+           (v v* ... . v2)))
 
 (define-language Lidentifyassigned
   (extends Lsrc)
@@ -154,13 +141,8 @@
   (free-body (fbody)
              (+ (free (v ...) (binding* ...) expr))))
 
-(define-language Lraisetoplevel
-  (extends Luncoverfree)
-  (expr (expr)
-        (+ (set!-global v expr))))
-
 (define-language Lclosurify
-  (extends Lraisetoplevel)
+  (extends Luncoverfree)
   (expr (expr)
         (+ (closure v lambda))))
 
@@ -174,6 +156,12 @@
 
 (define-language Ldebruijn
   (extends Lvoidlets)
+  (terminals
+   (- (exact-nonnegative-integer (exact-nonnegative-integer eni)))
+   (+ (exact-nonnegative-integer (exact-nonnegative-integer
+                                  eni
+                                  arg-count
+                                  max-let-depth))))
   (expr (expr)
         (- v
            (primitive id)
@@ -183,7 +171,6 @@
              expr)
            (set!-boxes (v ...) expr)
            (set!-values (v ...) expr)
-           (set!-global v expr)
            (#%box v)
            (#%unbox v)
            (#%variable-reference)
@@ -196,7 +183,6 @@
              expr)
            (set!-boxes eni1 eni2 expr)
            (set!-values eni1 eni2 expr)
-           (set!-global eni1 eni2 expr)
            (#%box eni)
            (#%unbox eni)
            (#%variable-reference eni)))
@@ -205,7 +191,7 @@
                           (+ (define-values (eni ...) expr)))
   (lambda (lambda)
     (- (#%plain-lambda formals fbody))
-    (+ (#%plain-lambda eni1 boolean (binding2 ...) (binding3 ...) expr)))
+    (+ (#%plain-lambda arg-count boolean (local-binding ...) (global-binding ...) expr)))
   (binding (binding)
            (+ eni
               (primitive eni)))
@@ -255,5 +241,6 @@
                             eni
                             general-top-level-form ...)))
   (lambda (lambda)
-    (- (#%plain-lambda eni1 boolean (binding2 ...) (binding3 ...) expr))
-    (+ (#%plain-lambda eni1 boolean (binding2 ...) (binding3 ...) eni4 expr))))
+    (- (#%plain-lambda arg-count boolean (local-binding ...) (global-binding ...) expr))
+    (+ (#%plain-lambda arg-count boolean (local-binding ...) (global-binding ...) max-let-depth
+                       expr))))
