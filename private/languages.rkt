@@ -3,7 +3,6 @@
 (provide (all-defined-out))
 (require nanopass/base
          racket/bool
-         (only-in compiler/zo-structs stx?)
          "utils.rkt")
 
 (define-language Lsrc
@@ -12,6 +11,7 @@
    (declaration-keyword (declaration-keyword))
    (datum (datum))
    (symbol (id))
+   (vector (vector))
    (variable (v var variable))
    (string (string))
    (path (path))
@@ -19,69 +19,57 @@
    (false (false))
    (exact-nonnegative-integer (exact-nonnegative-integer eni))
    (syntax (syntax-object))
-   (boolean (boolean)))
-  (top-level-form (top-level-form)
-                  general-top-level-form
-                  (#%expression expr)
-                  (module id module-path
-                    (module-level-form ...))
-                  (begin* top-level-form ...)
-                  (begin-for-syntax* top-level-form ...))
+   (boolean (boolean))
+   (number (number))
+   (bytes (bytes))
+   (name (name import-key))
+   (procedure (procedure)))
+  (linklet-form (linklet-form)
+                (linklet (((linklet-reqprov-element import-key) ...) ...) ; require field
+                         (linklet-reqprov-element* ...)                   ; provide field
+                         name
+                         get-import
+                         general-top-level-form ...))
+  (linklet-reqprov-element (linklet-reqprov-element)
+                           id
+                           (id id*))
+  (get-import (get-import)
+              procedure
+              false)
   (binding (binding)
            v
            false)
-  (module-level-form (module-level-form)
-                     general-top-level-form
-                     (#%provide raw-provide-spec ...)
-                     (begin-for-syntax module-level-form ...)
-                     submodule-form
-                     (#%declare declaration-keyword ...))
-  (submodule-form (submodule-form)
-                  (submodule id module-path
-                             (module-level-form ...))
-                  (submodule* id module-path
-                              (module-level-form ...)))
   (general-top-level-form (general-top-level-form)
                           expr
-                          (define-values (v ...) expr)
-                          (define-syntaxes (v ...) expr)
-                          (#%require raw-require-spec ...))
+                          (define-values (v ...) expr))
   (expr (expr)
         v
+        number
+        boolean
+        string
+        bytes
+        lambda
         (primitive id)
-        (#%plain-lambda formals expr* ... expr)
-        (case-lambda (formals expr* ... expr) ...)
+        (case-lambda lambda ...)
         (if expr1 expr2 expr3)
         (begin expr* ... expr)
         (begin0 expr expr* ...)
         (let-values ([(v ...) expr1] ...)
-          expr* ... expr)
+          expr)
         (letrec-values ([(v ...) expr1] ...)
-          expr* ... expr)
+          expr)
         (set! v expr)
         (quote datum)
-        (quote-syntax syntax-object)
-        (quote-syntax-local syntax-object)
         (with-continuation-mark expr1 expr2 expr3)
         (#%plain-app expr expr* ...)
-        (#%top . v)
         (#%variable-reference v)
-        (#%variable-reference-top v)
         (#%variable-reference))
+  (lambda (lambda)
+    (#%plain-lambda formals expr))
   (formals (formals)
            v
            (v ...)
            (v v* ... . v2))
-  (raw-require-spec (raw-require-spec rrs)
-                    phaseless-req-spec
-                    (for-meta phase-level phaseless-req-spec ...)
-                    (just-meta phase-level raw-require-spec ...))
-  (phaseless-req-spec (phaseless-req-spec)
-                      raw-module-path
-                      (only raw-module-path v ...)
-                      (all-except raw-module-path v ...)
-                      (prefix-all-except id raw-module-path v* ...)
-                      (rename raw-module-path v1 v2))
   (raw-module-path (raw-module-path)
                    raw-root-module-path
                    (submod raw-root-module-path id ...))
@@ -93,197 +81,24 @@
                         (file string)
                         (planet string1
                                 (string2 string3 string* ...))
-                        path)
-  (raw-provide-spec (raw-provide-spec rps)
-                    phaseless-prov-spec
-                    (for-meta* phase-level phaseless-prov-spec)
-                    (protect raw-provide-spec))
-  (phaseless-prov-spec (phaseless-prov-spec)
-                       v
-                       (rename* v1 v2)
-                       (struct v (v* ...))
-                       (all-from-except raw-module-path v ...)
-                       (all-defined-except v ...)
-                       (prefix-all-defined-except id v* ...)
-                       (protect* phaseless-prov-spec ...)))
-
-(define-language Lsubmodules
-  (extends Lsrc)
-  (top-level-form (top-level-form)
-                  (- (module id module-path
-                       (module-level-form ...)))
-                  (+ submodule-form))
-  (module-level-form (module-level-form)
-                     (- submodule-form))
-  (submodule-form (submodule-form)
-                  (- (submodule id module-path
-                                (module-level-form ...))
-                     (submodule* id module-path
-                                 (module-level-form ...)))
-                  (+ (module id module-path
-                       (module-level-form ...)
-                       (submodule-form ...)
-                       (submodule-form* ...)))))
-
-(define-language Lreqprov
-  (extends Lsubmodules)
-  (top-level-form (top-level-form)
-                  (+ (#%require raw-require-spec ...)))
-  (general-top-level-form (general-top-level-form)
-                          (- (#%require raw-require-spec ...)))
-  (module-level-form (module-level-form)
-                     (- (#%provide raw-provide-spec ...)))
-  (submodule-form (submodule-form)
-                  (- (module id module-path
-                       (module-level-form ...)
-                       (submodule-form ...)
-                       (submodule-form* ...)))
-                  (+ (module id module-path
-                       (raw-provide-spec ...)
-                       (raw-require-spec ...)
-                       (module-level-form ...)
-                       (submodule-form ...)
-                       (submodule-form* ...)))))
-
-(define-language Lsyntax
-  (extends Lreqprov)
-  (submodule-form (submodule-form)
-                  (- (module id module-path
-                       (raw-provide-spec ...)
-                       (raw-require-spec ...)
-                       (module-level-form ...)
-                       (submodule-form ...)
-                       (submodule-form* ...)))
-                 (+ (module id module-path
-                       (raw-provide-spec ...)
-                       (raw-require-spec ...)
-                       (module-level-form ...)
-                       (syntax-level-form ...)
-                       (submodule-form ...)
-                       (submodule-form* ...))))
-  (syntax-level-form (syntax-level-form)
-                     (+ (syntax eni (syntax-body ...))))
-  (syntax-body (syntax-body)
-               (+ (begin-for-syntax module-level-form ...)
-                  (define-syntaxes (v ...) expr)))
-  (module-level-form (module-level-form)
-                     (- (begin-for-syntax module-level-form ...)))
-  (general-top-level-form (general-top-level-form)
-                          (- (define-syntaxes (v ...) expr)))
-  (top-level-form (top-level-form)
-                  (+ (define-syntaxes* (v ...) expr))))
-
-(define-language Lmodulevars
-  (extends Lsyntax)
-  (prefix-form (prefix-form)
-               (+ (prefix (binding ...))))
-  (submodule-form (submodule-form)
-                  (- (module id module-path
-                       (raw-provide-spec ...)
-                       (raw-require-spec ...)
-                       (module-level-form ...)
-                       (syntax-level-form ...)
-                       (submodule-form ...)
-                       (submodule-form* ...)))
-                  (+ (module id module-path prefix-form
-                       (raw-provide-spec ...)
-                       (raw-require-spec ...)
-                       (module-level-form ...)
-                       (syntax-level-form ...)
-                       (submodule-form ...)
-                       (submodule-form* ...))))
-  (syntax-body (syntax-body)
-               (- (begin-for-syntax module-level-form ...)
-                  (define-syntaxes (v ...) expr))
-               (+ (begin-for-syntax prefix-form module-level-form ...)
-                  (define-syntaxes (v ...) prefix-form expr)))
-  (top-level-form (top-level-form)
-                  (- (define-syntaxes* (v ...) expr)
-                     (begin-for-syntax* top-level-form ...))
-                  (+ (define-syntaxes* (v ...) prefix-form expr)
-                     (begin-for-syntax* prefix-form top-level-form ...))))
-
-(define-language Lscrubreqprov
-  (extends Lmodulevars)
-  (raw-require-spec (raw-require-spec rrs)
-                    (- phaseless-req-spec
-                       (just-meta phase-level raw-require-spec ...)))
-  (phaseless-req-spec (phaseless-req-spec)
-                      (- (only raw-module-path v ...)
-                         (all-except raw-module-path v ...)
-                         (prefix-all-except id raw-module-path v* ...)))
-  (raw-provide-spec (raw-provide-spec rps)
-                    (- phaseless-prov-spec
-                       (for-meta* phase-level phaseless-prov-spec)
-                       (protect raw-provide-spec))
-                    (+ (for-meta* phase-level phaseless-prov-spec ...)))
-  (phaseless-prov-spec (phaseless-prov-spec)
-                       (- (all-from-except raw-module-path v ...)
-                          (all-defined-except v ...)
-                          (struct v (v* ...))
-                          (prefix-all-defined-except id v* ...)
-                          (protect* phaseless-prov-spec ...))
-                       (+ (protect v)
-                          (protect-rename* v1 v2))))
-
-(define-language Lindirectprov
-  (extends Lscrubreqprov)
-  (raw-provide-spec (raw-provide-spec rps)
-                    (- (for-meta* phase-level phaseless-prov-spec ...))
-                    (+ (for-meta* phase-level
-                                  (phaseless-prov-spec ...)
-                                  (phaseless-prov-spec* ...))))
-  (submodule-form (submodule-form)
-                  (- (module id module-path prefix-form
-                       (raw-provide-spec ...)
-                       (raw-require-spec ...)
-                       (module-level-form ...)
-                       (syntax-level-form ...)
-                       (submodule-form ...)
-                       (submodule-form* ...)))
-                  (+ (module id module-path prefix-form
-                       (raw-provide-spec ...)
-                       (raw-require-spec ...)
-                       (raw-provide-spec* ...)
-                       (module-level-form ...)
-                       (syntax-level-form ...)
-                       (submodule-form ...)
-                       (submodule-form* ...)))))
-
-(define-language Lbeginexplicit
-  (extends Lindirectprov)
-  (lambda (lambda)
-    (+ (#%plain-lambda formals expr)))
-  (expr (expr)
-        (- (#%plain-lambda formals expr* ... expr)
-           (case-lambda (formals expr* ... expr) ...)
-           (let-values ([(v ...) expr1] ...)
-             expr* ... expr)
-           (letrec-values ([(v ...) expr1] ...)
-             expr* ... expr))
-        (+ lambda
-           (case-lambda lambda ...)
-           (let-values ([(v ...) expr1] ...)
-             expr)
-           (letrec-values ([(v ...) expr1] ...)
-             expr))))
+                        path))
 
 (define-language Lidentifyassigned
-  (extends Lbeginexplicit)
-   (lambda (lambda)
-     (- (#%plain-lambda formals expr))
-     (+ (#%plain-lambda formals abody)))
-   (expr (expr)
-         (- (let-values ([(v ...) expr1] ...)
-              expr)
-            (letrec-values ([(v ...) expr1] ...)
-              expr))
-         (+ (let-values ([(v ...) expr1] ...)
-              abody)
-            (letrec-values ([(v ...) expr1] ...)
-              abody)))
-   (assigned-body (abody)
-                  (+ (assigned (v ...) expr))))
+  (extends Lsrc)
+  (lambda (lambda)
+    (- (#%plain-lambda formals expr))
+    (+ (#%plain-lambda formals abody)))
+  (expr (expr)
+        (- (let-values ([(v ...) expr1] ...)
+             expr)
+           (letrec-values ([(v ...) expr1] ...)
+             expr))
+        (+ (let-values ([(v ...) expr1] ...)
+             abody)
+           (letrec-values ([(v ...) expr1] ...)
+             abody)))
+  (assigned-body (abody)
+                 (+ (assigned (v ...) expr))))
 
 (define-language Lpurifyletrec
   (extends Lidentifyassigned)
@@ -333,9 +148,6 @@
 
 (define-language Luncoverfree
   (extends Lconvertassignments)
-  (entry compilation-top)
-  (compilation-top (compilation-top)
-                   (+ (program prefix-form top-level-form)))
   (lambda (lambda)
     (- (#%plain-lambda formals expr))
     (+ (#%plain-lambda formals fbody)))
@@ -360,33 +172,8 @@
         (+ (let ([v expr1]) expr)
            (let-void (v ...) expr))))
 
-(define-language Lscrubsyntax
-  (extends Lvoidlets)
-  (compilation-top (compilation-top)
-                   (- (program prefix-form top-level-form))
-                   (+ (program prefix-form (syntax-object ...) top-level-form)))
-  (prefix-form (prefix-form)
-               (- (prefix (binding ...)))
-               (+ (prefix (binding ...) (eni ...))))
-  (expr (expr)
-        (- (quote-syntax syntax-object)
-           (quote-syntax-local syntax-object))
-        (+ (quote-syntax eni))))
-
-(define-language Lreintroducesyntax
-  (extends Lscrubsyntax)
-  (terminals
-   (- (syntax (syntax-object)))
-   (+ (stx (stx))))
-  (compilation-top (compilation-top)
-                   (- (program prefix-form (syntax-object ...) top-level-form))
-                   (+ (program prefix-form top-level-form)))
-  (prefix-form (prefix-form)
-               (- (prefix (binding ...) (eni ...)))
-               (+ (prefix (binding ...) (stx ...)))))
-
 (define-language Ldebruijn
-  (extends Lreintroducesyntax)
+  (extends Lvoidlets)
   (expr (expr)
         (- v
            (primitive id)
@@ -399,11 +186,8 @@
            (set!-global v expr)
            (#%box v)
            (#%unbox v)
-           (#%top . v)
-           (quote-syntax eni)
            (#%variable-reference)
-           (#%variable-reference v)
-           (#%variable-reference-top v))
+           (#%variable-reference v))
         (+ binding
            (primitive eni)
            (let-void eni expr)
@@ -415,11 +199,7 @@
            (set!-global eni1 eni2 expr)
            (#%box eni)
            (#%unbox eni)
-           (#%top eni1 eni2)
-           (quote-syntax eni1 eni2)
-           (#%variable-reference-none eni1 eni2)
-           (#%variable-reference eni)
-           (#%variable-reference-top eni)))
+           (#%variable-reference eni)))
   (general-top-level-form (general-top-level-form)
                           (- (define-values (v ...) expr))
                           (+ (define-values (eni ...) expr)))
@@ -436,20 +216,44 @@
   (free-body (fbody)
              (- (free (v ...) (binding* ...) expr))))
 
-(define-language Lfindletdepth
+(define-language Lcleanreqprov
   (extends Ldebruijn)
+  (terminals
+   (- (symbol (id)))
+   (+ (symbol (id req-id prov-id intern-id lift-id))))
+  (linklet-form (linklet-form)
+                (- (linklet (((linklet-reqprov-element import-key) ...) ...)
+                            (linklet-reqprov-element* ...)
+                            name
+                            get-import
+                            general-top-level-form ...))
+                (+ (linklet (((req-id import-key) ...) ...)  ; Require field
+                            (prov-id ...)                    ; Provide field
+                            (intern-id ...)                  ; Internal field
+                            (lift-id ...)                    ; lifted field
+                            name
+                            get-import
+                            general-top-level-form ...))))
+
+(define-language Lfindletdepth
+  (extends Lcleanreqprov)
   (entry compilation-top)
-  (prefix-form (prefix-form)
-               (- (prefix (binding ...) (stx ...)))
-               (+ (prefix (binding ...) (stx ...) eni)))
+  (linklet-form (linklet-form)
+                (- (linklet (((req-id import-key) ...) ...)
+                            (prov-id ...)
+                            (intern-id ...)
+                            (lift-id ...)
+                            name
+                            get-import
+                            general-top-level-form ...))
+                (+ (linklet (((req-id import-key) ...) ...)
+                            (prov-id ...)
+                            (intern-id ...)
+                            (lift-id ...)
+                            name
+                            get-import
+                            eni
+                            general-top-level-form ...)))
   (lambda (lambda)
     (- (#%plain-lambda eni1 boolean (binding2 ...) (binding3 ...) expr))
     (+ (#%plain-lambda eni1 boolean (binding2 ...) (binding3 ...) eni4 expr))))
-
-(define-language Lbuildmoduleregistry
-  (extends Lfindletdepth)
-  (terminals
-   (+ (module-registry (module-registry))))
-  (compilation-top (compilation-top)
-                   (- (program prefix-form top-level-form))
-                   (+ (program prefix-form module-registry top-level-form))))
